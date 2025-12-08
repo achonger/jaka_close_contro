@@ -1,0 +1,19 @@
+faces:
+  - id: "10"  # +X 面
+    translation: [ 0.025,  0.000,  0.000 ]
+    rpy_deg:     [ -90.0,   0.0,  -90.0 ]
+
+  - id: "11"  # -X 面
+    translation: [ -0.025,  0.000,  0.000 ]
+    rpy_deg:     [ -90.0,   0.0,   90.0 ]
+
+  - id: "12"  # +Y 面
+    translation: [ 0.000,  0.025,  0.000 ]
+    rpy_deg:     [ -90.0,   0.0,    180.0 ]
+
+  - id: "13"  # -Y 面
+    translation: [ 0.000, -0.025,  0.000 ]
+    rpy_deg:     [ -90.0,   0.0,  0.0 ]
+
+tool_offset:
+  translation: [0.0, 0.0, 0.077]  # +Z 77mm
