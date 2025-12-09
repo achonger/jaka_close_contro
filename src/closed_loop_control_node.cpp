@@ -281,7 +281,7 @@ private:
     void loadCalibrationResult()
     {
         try {
-            YAML::Node config = YAML::LoadFile("/tmp/hand_eye_calibration.yaml");
+            YAML::Node config = YAML::LoadFile("/tmp/world_robot_calibration.yaml");
             
             double x = config["calibration_transform"]["position"]["x"].as<double>();
             double y = config["calibration_transform"]["position"]["y"].as<double>();
