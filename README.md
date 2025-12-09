@@ -45,6 +45,7 @@
    roslaunch jaka_close_contro hand_eye_calibration.launch
    ```
    如需修改 IP、相机话题或帧名称，可在启动文件中调整参数后重新运行。
+   > 提示：`roslaunch` 会占用当前终端，后续调用服务时请在**新的终端**或通过 `tmux`/`screen` 另开会话执行命令。
 3. **收集数据**：在不同末端位姿下调用数据采集服务（建议至少 10 组）：
    ```bash
    rosservice call /collect_calibration_data "{}"
@@ -172,7 +173,7 @@ roslaunch jaka_close_contro hand_eye_calibration.launch
 
 ### 2. 手眼标定操作步骤
 参考“标定流程”中的步骤 2：
-- 运行 `hand_eye_calibration.launch`，确认控制台中 `jaka_sdk_driver_node` 正常连上机械臂并开始发布关节状态
+- 运行 `hand_eye_calibration.launch`，确认控制台中 `jaka_sdk_driver_node` 正常连上机械臂并开始发布关节状态（`roslaunch` 会占用终端，后续命令请在新终端执行）
 - 在不同末端姿态下调用 `/collect_calibration_data`
 - 调用 `/calibrate_hand_eye` 求解，并在 TF 树/RViz 中确认
 
