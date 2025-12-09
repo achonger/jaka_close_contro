@@ -188,18 +188,19 @@ private:
 
 Eigen::Matrix4d calculateRobotPose(const sensor_msgs::JointState& joint_state)
 {
-    // 使用 TF 查询机器人基座到工具末端的位姿，而不是占位的单位矩阵。
-    // 前提：系统中已经有 robot_base_frame_ -> tool_frame_ 的 TF
-    // （由 JAKA SDK / MoveIt / robot_state_publisher 发布）。
+    // 使用 TF 查询机器人基座到工具末端的位姿，并尽量与最新的关节状态同步。
+    // 关节状态由仓库自带的 jaka_sdk_driver_node 发布，配合 robot_state_publisher 生成 TF。
     Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+
+    // 若关节时间戳为空，则退回最新 TF；否则按关节时间戳查询，提升同步性。
+    const ros::Time query_time = joint_state.header.stamp.isZero() ? ros::Time(0) : joint_state.header.stamp;
 
     try
     {
-        // 直接从 TF 树中查询当前基座到工具坐标系的变换
         geometry_msgs::TransformStamped T_base_tool_msg =
             tf_buffer_.lookupTransform(robot_base_frame_,    // 源：机器人基座
                                        tool_frame_,          // 目标：工具末端
-                                       ros::Time(0),
+                                       query_time,
                                        ros::Duration(1.0));
 
         T = transformToEigen(T_base_tool_msg.transform);
@@ -214,7 +215,6 @@ Eigen::Matrix4d calculateRobotPose(const sensor_msgs::JointState& joint_state)
         ROS_WARN_THROTTLE(5.0,
                           "Using Identity for T_robot_base_tool due to missing TF. "
                           "Calibration accuracy will be very poor!");
-        // 保持 T 为单位阵，避免抛异常终止节点；但这会显著降低标定精度。
     }
 
     return T;

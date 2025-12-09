@@ -164,15 +164,15 @@ rosservice call /start_closed_loop_control "{}"
 ## 使用方法
 
 ### 1. 一键启动手眼标定
-直接启动完整的手眼标定链路：
+直接启动完整的手眼标定链路（同时会拉起 `jaka_sdk_driver_node` 发布 `/joint_states` 与 `/jaka_driver/joint_move`）：
 ```bash
 roslaunch jaka_close_contro hand_eye_calibration.launch
 ```
-> 如需修改 IP、相机话题或帧名称，可在 launch 文件中调整参数后重新启动。
+> 如需修改机械臂 IP、相机话题或帧名称，可在 launch 文件中调整参数后重新启动。
 
 ### 2. 手眼标定操作步骤
 参考“标定流程”中的步骤 2：
-- 运行 `hand_eye_calibration.launch`
+- 运行 `hand_eye_calibration.launch`，确认控制台中 `jaka_sdk_driver_node` 正常连上机械臂并开始发布关节状态
 - 在不同末端姿态下调用 `/collect_calibration_data`
 - 调用 `/calibrate_hand_eye` 求解，并在 TF 树/RViz 中确认
 
