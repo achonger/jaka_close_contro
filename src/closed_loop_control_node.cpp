@@ -258,16 +258,16 @@ private:
         jaka_sdk_driver::JointMove srv;
         
         // 简化：直接使用当前关节位置加上一个小的调整
-        srv.request.target_type = jaka_sdk_driver::JointMoveRequest::JOINT_SPACE;
-        srv.request.velocity = 0.1;
-        srv.request.acceleration = 0.1;
-        srv.request.carte_pos.resize(6);
-        srv.request.carte_pos[0] = command.pose.position.x;
-        srv.request.carte_pos[1] = command.pose.position.y;
-        srv.request.carte_pos[2] = command.pose.position.z;
-        srv.request.carte_pos[3] = 0.0; // 简化
-        srv.request.carte_pos[4] = 0.0;
-        srv.request.carte_pos[5] = 0.0;
+        srv.request.coord_mode = 0; // 0: 关节空间
+        srv.request.mvvelo = 0.1;   // 速度
+        srv.request.mvacc = 0.1;    // 加速度
+        srv.request.pose.resize(6);
+        srv.request.pose[0] = command.pose.position.x;
+        srv.request.pose[1] = command.pose.position.y;
+        srv.request.pose[2] = command.pose.position.z;
+        srv.request.pose[3] = 0.0; // 简化
+        srv.request.pose[4] = 0.0;
+        srv.request.pose[5] = 0.0;
         
         if (joint_move_client_.call(srv)) {
             ROS_INFO("Control command sent successfully");
