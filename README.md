@@ -18,6 +18,12 @@
        物体位姿                            实际位姿反馈
 ```
 
+## 官方 URDF 与 TF 发布
+
+- 仓库已包含官方的 **JAKA Zu3** URDF（位于 `urdf/jaka_zu3.urdf`），通过 `launch/jaka_sdk_bringup.launch` 自动加载。
+- `jaka_sdk_bringup.launch` 同时启动 `robot_state_publisher`，依赖 JAKA SDK 发布的 `/joint_states` 来生成 TF，默认基座帧为 `Link_0`，末端帧为 `Link_6`。
+- 标定和闭环控制节点的默认帧名称已切换为上述官方命名，如需自定义可在对应 launch 文件中覆盖参数。
+
 ## 标定流程
 
 ### 1. 世界坐标系定义

@@ -21,8 +21,8 @@ public:
   {
     nh.param<std::string>("world_fiducial_topic", world_fiducial_topic_, "/world_fiducials");
     nh.param<int>("world_fiducial_id", world_fiducial_id_, 0);
-    nh.param<std::string>("robot_base_frame", robot_base_frame_, "jaka_base_link");
-    nh.param<std::string>("tool_frame", tool_frame_, "jaka_tool");
+    nh.param<std::string>("robot_base_frame", robot_base_frame_, "Link_0");
+    nh.param<std::string>("tool_frame", tool_frame_, "Link_6");
     nh.param<std::string>("camera_frame", camera_frame_, "zed2i_left_camera_optical_frame");
     nh.param<std::string>("output_frame", output_frame_, "handeye_calibration");
 

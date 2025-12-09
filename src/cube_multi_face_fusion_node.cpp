@@ -87,7 +87,7 @@ public:
   : nh_(nh), pnh_(pnh),
     camera_frame_default_("zed2i_left_camera_optical_frame"),
     cube_frame_("cube_center"),
-    tool_frame_("jaka_tool"),
+    tool_frame_("Link_6"),
     has_prev_(false),
     has_prev_q_(false),
     has_tool_offset_(false),
@@ -440,7 +440,7 @@ private:
       pub_.publish(pmsg);
     }
 
-    // 2. 发布 jaka_tool (机械臂法兰 = 立方体中心 + tool_offset)
+    // 2. 发布末端工具帧（默认 Link_6，机械臂法兰 = 立方体中心 + tool_offset）
     if (has_tool_offset_) {
       tf2::Transform T_tool = T_cube * tool_offset_;  // T_cam_tool = T_cam_cube * T_cube_tool
       

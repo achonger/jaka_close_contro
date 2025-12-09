@@ -11,12 +11,15 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <fstream>
+#include <string>
 
 class ClosedLoopControlNode
 {
 public:
     ClosedLoopControlNode(ros::NodeHandle& nh) : tf_listener_(tf_buffer_)
     {
+        nh.param<std::string>("base_frame", base_frame_, "Link_0");
+
         // 订阅ArUco标记检测结果
         marker_sub_ = nh.subscribe("/aruco/markers", 1, &ClosedLoopControlNode::markerCallback, this);
         
@@ -39,7 +42,7 @@ public:
         loadCalibrationResult();
         
         // 设置默认目标位姿
-        target_pose_.header.frame_id = "world";
+        target_pose_.header.frame_id = base_frame_;
         target_pose_.pose.position.x = 0.3;
         target_pose_.pose.position.y = 0.0;
         target_pose_.pose.position.z = 0.2;
@@ -58,7 +61,9 @@ private:
     ros::Publisher target_pose_pub_;
     ros::Publisher current_pose_pub_;
     ros::ServiceClient joint_move_client_;
-    
+
+    std::string base_frame_;
+
     tf2_ros::Buffer tf_buffer_;
     tf2_ros::TransformListener tf_listener_;
     
@@ -149,7 +154,7 @@ private:
         // 将相机坐标系下的位姿转换到机械臂基坐标系
         geometry_msgs::PoseStamped robot_pose;
         robot_pose.header = camera_pose.header;
-        robot_pose.header.frame_id = "base_link";
+        robot_pose.header.frame_id = base_frame_;
         
         // 使用Eigen进行坐标变换
         Eigen::Vector3d camera_translation(camera_pose.pose.position.x, 
@@ -212,7 +217,7 @@ private:
     geometry_msgs::PoseStamped calculateControlCommand()
     {
         geometry_msgs::PoseStamped command;
-        command.header.frame_id = "base_link";
+        command.header.frame_id = base_frame_;
         command.header.stamp = ros::Time::now();
         
         // 简单的比例控制器

@@ -1,15 +1,24 @@
 <launch>
+  <arg name="ip" default="192.168.1.100" />
+  <arg name="urdf_file" default="$(find jaka_close_contro)/urdf/jaka_zu3.urdf" />
+
+  <!-- JAKA 驱动与官方 URDF，提供 /joint_states 与 TF -->
+  <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
+    <arg name="ip" value="$(arg ip)" />
+    <arg name="urdf_file" value="$(arg urdf_file)" />
+  </include>
+
   <!-- World-Robot标定节点 -->
   <node name="world_robot_calibration_node" pkg="jaka_close_contro" type="world_robot_calibration_node" output="screen">
     <param name="world_frame" value="world" />
-    <param name="robot_base_frame" value="jaka_base_link" />
-    <param name="tool_frame" value="jaka_tool" />
+    <param name="robot_base_frame" value="Link_0" />
+    <param name="tool_frame" value="Link_6" />
     <param name="camera_frame" value="zed2i_left_camera_optical_frame" />
     <param name="cube_frame" value="cube_center" />
   </node>
-  
+
   <!-- 服务调用示例 -->
-  <!-- 
+  <!--
   <node name="calibration_client_example" pkg="jaka_close_contro" type="calibration_client_example.py" output="screen" />
   -->
 </launch>

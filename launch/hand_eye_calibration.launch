@@ -1,16 +1,13 @@
 <launch>
   <!-- 机器人 IP，默认与 jaka_openloop_bringup.launch 一致，可按需覆盖 -->
   <arg name="ip" default="192.168.1.100"/>
+  <arg name="urdf_file" default="$(find jaka_close_contro)/urdf/jaka_zu3.urdf" />
 
-  <!-- 0. 启动 JAKA ZU3 驱动，提供 /joint_states 与 /jaka_driver/joint_move -->
-  <param name="/ip" value="$(arg ip)"/>
-  <node pkg="jaka_sdk_driver"
-        type="jaka_sdk_driver_node"
-        name="jaka_sdk_driver_node"
-        output="screen">
-    <param name="robot_ip"  value="$(arg ip)"/>
-    <param name="status_hz" value="50.0"/>
-  </node>
+  <!-- 0. 启动 JAKA ZU3 驱动与 robot_state_publisher（发布 TF 树） -->
+  <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
+    <arg name="ip" value="$(arg ip)" />
+    <arg name="urdf_file" value="$(arg urdf_file)" />
+  </include>
 
   <!-- 1. 启动 ZED2i 相机（可根据实际相机型号/launch 文件调整） -->
   <include file="$(find zed_wrapper)/launch/zed2i.launch">
@@ -85,8 +82,8 @@
         output="screen">
     <param name="world_fiducial_topic" value="/world_fiducials" />
     <param name="world_fiducial_id"    value="0" />
-    <param name="robot_base_frame"     value="jaka_base_link" />
-    <param name="tool_frame"           value="jaka_tool" />
+    <param name="robot_base_frame"     value="Link_0" />
+    <param name="tool_frame"           value="Link_6" />
     <param name="camera_frame"         value="zed2i_left_camera_optical_frame" />
   </node>
 
@@ -96,8 +93,8 @@
         name="world_robot_calibration_node"
         output="screen">
     <param name="world_frame"       value="world" />
-    <param name="robot_base_frame"  value="jaka_base_link" />
-    <param name="tool_frame"        value="jaka_tool" />
+    <param name="robot_base_frame"  value="Link_0" />
+    <param name="tool_frame"        value="Link_6" />
     <param name="camera_frame"      value="zed2i_left_camera_optical_frame" />
     <param name="cube_frame"        value="cube_center" />
   </node>

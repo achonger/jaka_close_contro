@@ -1,9 +1,13 @@
 <launch>
   <!-- 机械臂 IP，接口风格与 jaka_openloop_bringup.launch 保持一致 -->
   <arg name="ip" default="192.168.1.100"/>
+  <arg name="urdf_file" default="$(find jaka_close_contro)/urdf/jaka_zu3.urdf" />
 
   <!-- 全局 /ip 参数，兼容以前可能会用到这个参数的节点 -->
   <param name="/ip" value="$(arg ip)"/>
+
+  <!-- 发布官方 URDF 描述，供 robot_state_publisher 生成 TF -->
+  <param name="robot_description" textfile="$(arg urdf_file)" />
 
   <!-- 启动基于 JAKA SDK 的驱动节点 -->
   <node pkg="jaka_sdk_driver"
@@ -15,5 +19,12 @@
     <param name="robot_ip"  value="$(arg ip)"/>
     <!-- joint_states 发布频率 -->
     <param name="status_hz" value="50.0"/>
+  </node>
+
+  <!-- 使用官方 URDF + /joint_states 发布机械臂 TF -->
+  <node pkg="robot_state_publisher"
+        type="robot_state_publisher"
+        name="robot_state_publisher">
+    <param name="publish_frequency" value="100.0" />
   </node>
 </launch>
