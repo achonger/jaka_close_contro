@@ -16,15 +16,16 @@
 class HandEyeCalibrationNode
 {
 public:
-  HandEyeCalibrationNode(ros::NodeHandle& nh)
+  HandEyeCalibrationNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
     : tf_listener_(tf_buffer_)
   {
-    nh.param<std::string>("world_fiducial_topic", world_fiducial_topic_, "/world_fiducials");
-    nh.param<int>("world_fiducial_id", world_fiducial_id_, 0);
-    nh.param<std::string>("robot_base_frame", robot_base_frame_, "Link_0");
-    nh.param<std::string>("tool_frame", tool_frame_, "Link_6");
-    nh.param<std::string>("camera_frame", camera_frame_, "zed2i_left_camera_optical_frame");
-    nh.param<std::string>("output_frame", output_frame_, "handeye_calibration");
+    // 使用私有命名空间读取参数，确保 launch 中的配置生效
+    pnh.param<std::string>("world_fiducial_topic", world_fiducial_topic_, "/world_fiducials");
+    pnh.param<int>("world_fiducial_id", world_fiducial_id_, 0);
+    pnh.param<std::string>("robot_base_frame", robot_base_frame_, "Link_0");
+    pnh.param<std::string>("tool_frame", tool_frame_, "Link_6");
+    pnh.param<std::string>("camera_frame", camera_frame_, "zed2i_left_camera_optical_frame");
+    pnh.param<std::string>("output_frame", output_frame_, "handeye_calibration");
 
     fiducial_sub_ = nh.subscribe(world_fiducial_topic_, 1, &HandEyeCalibrationNode::fiducialCallback, this);
     joint_state_sub_ = nh.subscribe("/joint_states", 1, &HandEyeCalibrationNode::jointStateCallback, this);
@@ -273,7 +274,8 @@ int main(int argc, char** argv)
 {
   ros::init(argc, argv, "calibration_node");
   ros::NodeHandle nh;
-  HandEyeCalibrationNode node(nh);
+  ros::NodeHandle pnh("~");
+  HandEyeCalibrationNode node(nh, pnh);
   ros::spin();
   return 0;
 }

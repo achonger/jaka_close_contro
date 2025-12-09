@@ -16,9 +16,10 @@
 class ClosedLoopControlNode
 {
 public:
-    ClosedLoopControlNode(ros::NodeHandle& nh) : tf_listener_(tf_buffer_)
+    ClosedLoopControlNode(ros::NodeHandle& nh, ros::NodeHandle& pnh) : tf_listener_(tf_buffer_)
     {
-        nh.param<std::string>("base_frame", base_frame_, "Link_0");
+        // 使用私有命名空间读取参数，避免与其他节点冲突
+        pnh.param<std::string>("base_frame", base_frame_, "Link_0");
 
         // 订阅ArUco标记检测结果
         marker_sub_ = nh.subscribe("/aruco/markers", 1, &ClosedLoopControlNode::markerCallback, this);
@@ -311,9 +312,10 @@ private:
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "closed_loop_control_node");
-    ros::NodeHandle nh("~");
-    
-    ClosedLoopControlNode control_node(nh);
+    ros::NodeHandle nh;
+    ros::NodeHandle pnh("~");
+
+    ClosedLoopControlNode control_node(nh, pnh);
     
     ros::spin();
     return 0;

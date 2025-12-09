@@ -16,7 +16,7 @@
 class WorldRobotCalibrationNode
 {
 public:
-    WorldRobotCalibrationNode(ros::NodeHandle& nh) : tf_listener_(tf_buffer_)
+    WorldRobotCalibrationNode(ros::NodeHandle& nh, ros::NodeHandle& pnh) : tf_listener_(tf_buffer_)
     {
         // 订阅立方体中心位姿（从相机坐标系）
         cube_pose_sub_ = nh.subscribe("/cube_center_fused", 1, &WorldRobotCalibrationNode::cubePoseCallback, this);
@@ -34,12 +34,12 @@ public:
         // 发布标定结果
         calibration_result_pub_ = nh.advertise<geometry_msgs::PoseStamped>("/world_robot_calibration_result", 1);
         
-        // 读取参数
-        nh.param<std::string>("world_frame", world_frame_, "world");
-        nh.param<std::string>("robot_base_frame", robot_base_frame_, "Link_0");
-        nh.param<std::string>("tool_frame", tool_frame_, "Link_6");
-        nh.param<std::string>("camera_frame", camera_frame_, "zed2i_left_camera_optical_frame");
-        nh.param<std::string>("cube_frame", cube_frame_, "cube_center");
+        // 读取参数（使用私有命名空间，确保 launch 覆盖生效）
+        pnh.param<std::string>("world_frame", world_frame_, "world");
+        pnh.param<std::string>("robot_base_frame", robot_base_frame_, "Link_0");
+        pnh.param<std::string>("tool_frame", tool_frame_, "Link_6");
+        pnh.param<std::string>("camera_frame", camera_frame_, "zed2i_left_camera_optical_frame");
+        pnh.param<std::string>("cube_frame", cube_frame_, "cube_center");
         
         ROS_INFO("World-Robot Calibration Node initialized");
         ROS_INFO("World frame: %s", world_frame_.c_str());
@@ -403,9 +403,10 @@ Eigen::Vector3d solveTranslationAXB(const std::vector<Eigen::Matrix4d>& A,
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "world_robot_calibration_node");
-    ros::NodeHandle nh("~");
-    
-    WorldRobotCalibrationNode cal_node(nh);
+    ros::NodeHandle nh;
+    ros::NodeHandle pnh("~");
+
+    WorldRobotCalibrationNode cal_node(nh, pnh);
     
     ros::spin();
     return 0;
