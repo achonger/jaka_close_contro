@@ -77,6 +77,22 @@ target_link_libraries(cube_multi_face_fusion_node
   gflags
 )
 
+# 5. 标定节点
+add_executable(calibration_node src/calibration_node.cpp)
+target_link_libraries(calibration_node
+  ${catkin_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
+  ${EIGEN3_LIBRARIES}
+)
+
+# 6. 闭环控制节点
+add_executable(closed_loop_control_node src/closed_loop_control_node.cpp)
+target_link_libraries(closed_loop_control_node
+  ${catkin_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
+  ${EIGEN3_LIBRARIES}
+)
+
 # 安装配置文件
 install(DIRECTORY launch config
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
