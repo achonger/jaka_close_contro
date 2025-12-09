@@ -11,6 +11,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <yaml-cpp/yaml.h>
+#include <ros/package.h>
 #include <fstream>
 
 class HandEyeCalibrationNode
@@ -27,6 +28,9 @@ public:
     pnh.param<std::string>("camera_frame", camera_frame_, "zed2i_left_camera_optical_frame");
     pnh.param<std::string>("output_frame", output_frame_, "handeye_calibration");
 
+    const std::string default_output = ros::package::getPath("jaka_close_contro") + "/config/hand_eye_calibration.yaml";
+    pnh.param<std::string>("output_yaml", output_yaml_path_, default_output);
+
     fiducial_sub_ = nh.subscribe(world_fiducial_topic_, 1, &HandEyeCalibrationNode::fiducialCallback, this);
     joint_state_sub_ = nh.subscribe("/joint_states", 1, &HandEyeCalibrationNode::jointStateCallback, this);
 
@@ -37,6 +41,8 @@ public:
 
     ROS_INFO("Hand-eye calibration node ready. Listening on %s for fiducials (ID=%d)",
              world_fiducial_topic_.c_str(), world_fiducial_id_);
+
+    loadExistingCalibration();
   }
 
 private:
@@ -66,6 +72,7 @@ private:
   std::string tool_frame_;
   std::string camera_frame_;
   std::string output_frame_;
+  std::string output_yaml_path_;
 
   void fiducialCallback(const fiducial_msgs::FiducialTransformArray::ConstPtr& msg)
   {
@@ -262,11 +269,59 @@ private:
     node["hand_eye_calibration"]["orientation"]["y"] = pose.pose.orientation.y;
     node["hand_eye_calibration"]["orientation"]["z"] = pose.pose.orientation.z;
 
-    std::ofstream ofs("/tmp/hand_eye_calibration.yaml");
+    std::ofstream ofs(output_yaml_path_);
     ofs << node;
     ofs.close();
 
-    ROS_INFO("[HandEye] 标定结果发布到 %s，已保存到 /tmp/hand_eye_calibration.yaml", pose.header.frame_id.c_str());
+    ROS_INFO("[HandEye] 标定结果发布到 %s，已保存到 %s",
+             pose.header.frame_id.c_str(), output_yaml_path_.c_str());
+  }
+
+  void loadExistingCalibration()
+  {
+    try
+    {
+      const YAML::Node node = YAML::LoadFile(output_yaml_path_);
+
+      const auto& root = node["hand_eye_calibration"];
+      if (!root)
+      {
+        return;
+      }
+
+      geometry_msgs::TransformStamped tf_msg;
+      tf_msg.header.frame_id = camera_frame_;
+      tf_msg.child_frame_id = tool_frame_;
+      tf_msg.header.stamp = ros::Time::now();
+
+      tf_msg.transform.translation.x = root["position"]["x"].as<double>();
+      tf_msg.transform.translation.y = root["position"]["y"].as<double>();
+      tf_msg.transform.translation.z = root["position"]["z"].as<double>();
+      tf_msg.transform.rotation.w = root["orientation"]["w"].as<double>();
+      tf_msg.transform.rotation.x = root["orientation"]["x"].as<double>();
+      tf_msg.transform.rotation.y = root["orientation"]["y"].as<double>();
+      tf_msg.transform.rotation.z = root["orientation"]["z"].as<double>();
+
+      // 发布一次结果，便于重启后无需重新标定即可使用
+      result_pub_.publish(toPose(tf_msg));
+      tf_broadcaster_.sendTransform(tf_msg);
+      ROS_INFO("[HandEye] 已从 %s 载入历史标定并发布 TF", output_yaml_path_.c_str());
+    }
+    catch (const YAML::Exception& e)
+    {
+      ROS_INFO("[HandEye] 未找到已有标定文件(%s)，等待新标定", output_yaml_path_.c_str());
+    }
+  }
+
+  geometry_msgs::PoseStamped toPose(const geometry_msgs::TransformStamped& tf_msg)
+  {
+    geometry_msgs::PoseStamped pose;
+    pose.header = tf_msg.header;
+    pose.pose.position.x = tf_msg.transform.translation.x;
+    pose.pose.position.y = tf_msg.transform.translation.y;
+    pose.pose.position.z = tf_msg.transform.translation.z;
+    pose.pose.orientation = tf_msg.transform.rotation;
+    return pose;
   }
 };
 

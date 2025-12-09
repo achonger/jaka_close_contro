@@ -12,6 +12,7 @@
 #include <Eigen/Geometry>
 #include <Eigen/SVD>
 #include <Eigen/Eigenvalues>
+#include <ros/package.h>
 
 class WorldRobotCalibrationNode
 {
@@ -40,13 +41,18 @@ public:
         pnh.param<std::string>("tool_frame", tool_frame_, "Link_6");
         pnh.param<std::string>("camera_frame", camera_frame_, "zed2i_left_camera_optical_frame");
         pnh.param<std::string>("cube_frame", cube_frame_, "cube_center");
-        
+
+        const std::string default_output = ros::package::getPath("jaka_close_contro") + "/config/world_robot_calibration.yaml";
+        pnh.param<std::string>("output_yaml", output_yaml_path_, default_output);
+
         ROS_INFO("World-Robot Calibration Node initialized");
         ROS_INFO("World frame: %s", world_frame_.c_str());
         ROS_INFO("Robot base frame: %s", robot_base_frame_.c_str());
         ROS_INFO("Tool frame: %s", tool_frame_.c_str());
         ROS_INFO("Camera frame: %s", camera_frame_.c_str());
         ROS_INFO("Cube frame: %s", cube_frame_.c_str());
+
+        loadExistingCalibration();
     }
 
 private:
@@ -73,6 +79,7 @@ private:
     std::string tool_frame_;
     std::string camera_frame_;
     std::string cube_frame_;
+    std::string output_yaml_path_;
 
     void cubePoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
     {
@@ -391,12 +398,43 @@ Eigen::Vector3d solveTranslationAXB(const std::vector<Eigen::Matrix4d>& A,
         config["world_robot_calibration"]["orientation"]["x"] = result.pose.orientation.x;
         config["world_robot_calibration"]["orientation"]["y"] = result.pose.orientation.y;
         config["world_robot_calibration"]["orientation"]["z"] = result.pose.orientation.z;
-        
-        std::ofstream file("/tmp/world_robot_calibration.yaml");
+
+        std::ofstream file(output_yaml_path_);
         file << config;
         file.close();
-        
-        ROS_INFO("Calibration result saved to /tmp/world_robot_calibration.yaml");
+
+        ROS_INFO("Calibration result saved to %s", output_yaml_path_.c_str());
+    }
+
+    void loadExistingCalibration()
+    {
+        try
+        {
+            const YAML::Node config = YAML::LoadFile(output_yaml_path_);
+            const auto& root = config["world_robot_calibration"];
+            if (!root)
+            {
+                return;
+            }
+
+            geometry_msgs::PoseStamped result;
+            result.header.frame_id = world_frame_;
+            result.header.stamp = ros::Time::now();
+            result.pose.position.x = root["position"]["x"].as<double>();
+            result.pose.position.y = root["position"]["y"].as<double>();
+            result.pose.position.z = root["position"]["z"].as<double>();
+            result.pose.orientation.w = root["orientation"]["w"].as<double>();
+            result.pose.orientation.x = root["orientation"]["x"].as<double>();
+            result.pose.orientation.y = root["orientation"]["y"].as<double>();
+            result.pose.orientation.z = root["orientation"]["z"].as<double>();
+
+            calibration_result_pub_.publish(result);
+            ROS_INFO("已从 %s 载入世界-机器人标定结果", output_yaml_path_.c_str());
+        }
+        catch (const YAML::Exception& e)
+        {
+            ROS_INFO("未在 %s 找到已保存的世界-机器人标定结果", output_yaml_path_.c_str());
+        }
     }
 };
 

@@ -8,6 +8,7 @@
 #include <std_srvs/Trigger.h>
 #include <jaka_sdk_driver/JointMove.h>
 #include <yaml-cpp/yaml.h>
+#include <ros/package.h>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <fstream>
@@ -20,6 +21,9 @@ public:
     {
         // 使用私有命名空间读取参数，避免与其他节点冲突
         pnh.param<std::string>("base_frame", base_frame_, "Link_0");
+
+        const std::string default_output = ros::package::getPath("jaka_close_contro") + "/config/world_robot_calibration.yaml";
+        pnh.param<std::string>("world_robot_calibration_yaml", world_robot_yaml_path_, default_output);
 
         // 订阅ArUco标记检测结果
         marker_sub_ = nh.subscribe("/aruco/markers", 1, &ClosedLoopControlNode::markerCallback, this);
@@ -64,6 +68,7 @@ private:
     ros::ServiceClient joint_move_client_;
 
     std::string base_frame_;
+    std::string world_robot_yaml_path_;
 
     tf2_ros::Buffer tf_buffer_;
     tf2_ros::TransformListener tf_listener_;
@@ -287,23 +292,28 @@ private:
     void loadCalibrationResult()
     {
         try {
-            YAML::Node config = YAML::LoadFile("/tmp/world_robot_calibration.yaml");
-            
-            double x = config["calibration_transform"]["position"]["x"].as<double>();
-            double y = config["calibration_transform"]["position"]["y"].as<double>();
-            double z = config["calibration_transform"]["position"]["z"].as<double>();
-            double qw = config["calibration_transform"]["orientation"]["w"].as<double>();
-            double qx = config["calibration_transform"]["orientation"]["x"].as<double>();
-            double qy = config["calibration_transform"]["orientation"]["y"].as<double>();
-            double qz = config["calibration_transform"]["orientation"]["z"].as<double>();
-            
+            YAML::Node config = YAML::LoadFile(world_robot_yaml_path_);
+            const auto& root = config["world_robot_calibration"];
+            if (!root)
+            {
+                throw YAML::Exception(YAML::Mark::null_mark(), "缺少 world_robot_calibration 字段");
+            }
+
+            double x = root["position"]["x"].as<double>();
+            double y = root["position"]["y"].as<double>();
+            double z = root["position"]["z"].as<double>();
+            double qw = root["orientation"]["w"].as<double>();
+            double qx = root["orientation"]["x"].as<double>();
+            double qy = root["orientation"]["y"].as<double>();
+            double qz = root["orientation"]["z"].as<double>();
+
             camera_to_robot_tf_.translation() = Eigen::Vector3d(x, y, z);
             Eigen::Quaterniond quat(qw, qx, qy, qz);
             camera_to_robot_tf_.linear() = quat.matrix();
-            
-            ROS_INFO("Calibration result loaded successfully");
+
+            ROS_INFO("已从 %s 载入世界-机器人标定结果", world_robot_yaml_path_.c_str());
         } catch (const YAML::Exception& e) {
-            ROS_WARN("Could not load calibration file, using identity transform");
+            ROS_WARN("无法加载标定文件 %s，使用单位变换", world_robot_yaml_path_.c_str());
             camera_to_robot_tf_ = Eigen::Isometry3d::Identity();
         }
     }

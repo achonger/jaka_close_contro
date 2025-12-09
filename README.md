@@ -60,6 +60,8 @@
    ```bash
    rosservice call /calibrate_hand_eye "{}"
    ```
+   - 数据采集仅保存在节点内存中，重启节点会清空采样；
+   - 标定完成后会将结果写入 `config/hand_eye_calibration.yaml`（可通过私有参数 `~output_yaml` 自定义），下次启动节点会自动加载并重新发布 TF，无需每次开机都重复标定。
 5. **验证标定**：移动机械臂，观察 TF 树和 RViz 中的检测结果是否与实际位置一致。
 
 ### 3. 世界-机器人标定
@@ -89,6 +91,8 @@
    ```bash
    rosservice call /calibrate_world_robot "{}"
    ```
+   - 采集的样本同样仅保存在节点内存中；
+   - 求解的结果会写入 `config/world_robot_calibration.yaml`（可通过私有参数 `~output_yaml` 自定义），节点启动时会自动加载并发布到 `/world_robot_calibration_result`，闭环控制节点也会从该文件读取，无需每次重启重新标定。
 
 5. **验证标定结果**：
    - 检查标定结果的合理性
