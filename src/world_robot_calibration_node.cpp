@@ -186,29 +186,40 @@ private:
         return T;
     }
 
-    Eigen::Matrix4d calculateRobotPose(const sensor_msgs::JointState& joint_state)
+Eigen::Matrix4d calculateRobotPose(const sensor_msgs::JointState& joint_state)
+{
+    // 使用 TF 查询机器人基座到工具末端的位姿，而不是占位的单位矩阵。
+    // 前提：系统中已经有 robot_base_frame_ -> tool_frame_ 的 TF
+    // （由 JAKA SDK / MoveIt / robot_state_publisher 发布）。
+    Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+
+    try
     {
-        // 这里需要实现正运动学计算
-        // 简化实现：假设我们可以通过某种方式得到末端执行器相对于基座的位姿
-        // 实际应用中，这需要使用机器人URDF和正运动学库（如KDL或MoveIt）
-        
-        // 临时实现：返回一个单位矩阵，实际应用中需要使用正运动学
-        Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
-        
-        // 在实际实现中，这里应该使用机器人DH参数或URDF进行正运动学计算
-        // 示例（伪代码）：
-        // KDL::ChainFkSolverPos_recursive fk_solver(robot_chain_);
-        // KDL::JntArray joint_positions(6);
-        // for(int i = 0; i < 6; i++) {
-        //     joint_positions(i) = joint_state.position[i];
-        // }
-        // KDL::Frame pose;
-        // fk_solver.JntToCart(joint_positions, pose);
-        // T = kdlFrameToEigenMatrix(pose);
-        
-        ROS_WARN_ONCE("Robot FK calculation is not implemented. Using identity matrix as placeholder.");
-        return T;
+        // 直接从 TF 树中查询当前基座到工具坐标系的变换
+        geometry_msgs::TransformStamped T_base_tool_msg =
+            tf_buffer_.lookupTransform(robot_base_frame_,    // 源：机器人基座
+                                       tool_frame_,          // 目标：工具末端
+                                       ros::Time(0),
+                                       ros::Duration(1.0));
+
+        T = transformToEigen(T_base_tool_msg.transform);
     }
+    catch (tf2::TransformException& ex)
+    {
+        ROS_ERROR_THROTTLE(1.0,
+                           "Failed to lookup TF %s -> %s for FK: %s",
+                           robot_base_frame_.c_str(),
+                           tool_frame_.c_str(),
+                           ex.what());
+        ROS_WARN_THROTTLE(5.0,
+                          "Using Identity for T_robot_base_tool due to missing TF. "
+                          "Calibration accuracy will be very poor!");
+        // 保持 T 为单位阵，避免抛异常终止节点；但这会显著降低标定精度。
+    }
+
+    return T;
+}
+
 
     geometry_msgs::PoseStamped performWorldRobotCalibration()
     {
@@ -334,33 +345,40 @@ private:
         return R;
     }
 
-    // 求解AX=XB问题的平移部分
-    Eigen::Vector3d solveTranslationAXB(const std::vector<Eigen::Matrix4d>& A, 
-                                       const std::vector<Eigen::Matrix4d>& B, 
-                                       const Eigen::Matrix3d& R_world_robot_base)
+   // 求解 AX = XB 问题的平移部分
+Eigen::Vector3d solveTranslationAXB(const std::vector<Eigen::Matrix4d>& A,
+                                   const std::vector<Eigen::Matrix4d>& B,
+                                   const Eigen::Matrix3d& R_world_robot_base)
+{
+    // 由 AX = XB 在 SE(3) 上展开可得：
+    //   R_a t_x + t_a = R_x t_b + t_x
+    // => (R_a - I) t_x = R_x t_b - t_a
+    // 其中 R_x 就是已由 solveRotationAXB 求得的 R_world_robot_base。
+    const size_t N = A.size();
+
+    Eigen::MatrixXd C(3 * N, 3);
+    Eigen::VectorXd d(3 * N);
+
+    for (size_t i = 0; i < N; ++i)
     {
-        // 构建线性方程组求解平移向量
-        // (I - Ra) * t_x = Rb * tb - ta
-        Eigen::MatrixXd C(A.size() * 3, 3);
-        Eigen::VectorXd d(A.size() * 3);
-        
-        for (size_t i = 0; i < A.size(); ++i) {
-            Eigen::Vector3d ta = A[i].block<3, 1>(0, 3);
-            Eigen::Vector3d tb = B[i].block<3, 1>(0, 3);
-            Eigen::Matrix3d Ra = A[i].block<3, 3>(0, 0);
-            Eigen::Matrix3d Rb = B[i].block<3, 3>(0, 0);
-            
-            Eigen::Vector3d rhs = Rb * tb - ta;
-            
-            C.block<3, 3>(i * 3, 0) = Eigen::Matrix3d::Identity() - Ra;
-            d.segment<3>(i * 3) = rhs;
-        }
-        
-        // 使用最小二乘法求解
-        Eigen::Vector3d t_world_robot_base = C.colPivHouseholderQr().solve(d);
-        
-        return t_world_robot_base;
+        Eigen::Vector3d ta = A[i].block<3,1>(0,3);
+        Eigen::Vector3d tb = B[i].block<3,1>(0,3);
+        Eigen::Matrix3d Ra = A[i].block<3,3>(0,0);
+
+        // 右端项：R_x * t_b - t_a
+        Eigen::Vector3d rhs = R_world_robot_base * tb - ta;
+
+        // 系数矩阵：R_a - I
+        C.block<3,3>(3 * i, 0) = Ra - Eigen::Matrix3d::Identity();
+        d.segment<3>(3 * i)    = rhs;
     }
+
+    // 使用最小二乘法求解 t_world_robot_base
+    Eigen::Vector3d t_world_robot_base = C.colPivHouseholderQr().solve(d);
+
+    return t_world_robot_base;
+}
+
 
     void saveCalibrationResult(const geometry_msgs::PoseStamped& result)
     {
