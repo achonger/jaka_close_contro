@@ -166,26 +166,43 @@ rosservice call /start_closed_loop_control "{}"
 
 ## 使用方法
 
-### 1. 自动标定流程
-运行标定脚本：
+### 1. 一键启动手眼标定节点
+使用新的总启动文件带起相机、Aruco 检测、世界坐标定义、多面融合和标定节点：
 ```bash
-/workspace/scripts/calibration_procedure.sh
+roslaunch jaka_close_contro hand_eye_calibration.launch
 ```
 
-### 2. 世界-机器人标定流程
+> 如需修改 IP、相机话题或帧名称，可在 launch 文件中调整参数后重新启动。
+
+### 2. 手眼标定操作步骤
+1. **准备环境**：确保末端标定板清晰可见，相机驱动正常，机器人与 ROS 网络互通。
+2. **启动节点**：运行上述 `hand_eye_calibration.launch`。
+3. **收集数据**：在不同末端位姿下调用数据采集服务（示例命令）：
+   ```bash
+   rosservice call /collect_calibration_data "{}"
+   ```
+   建议至少采集 10 组不同姿态的数据。
+4. **执行手眼标定**：数据足够后调用标定服务：
+   ```bash
+   rosservice call /calibrate_hand_eye "{}"
+   ```
+   成功后会发布相机到工具端的 TF。若需要对齐世界坐标系，可继续使用 `/collect_world_robot_calibration_data` 和 `/calibrate_world_robot` 进行基座标定。
+5. **验证结果**：移动机械臂，观察 TF 树和 RViz 中检测到的目标是否与实际位置一致。
+
+### 3. 世界-机器人标定流程
 使用Python脚本进行标定：
 ```bash
 python3 /workspace/scripts/calibrate_world_robot.py
 ```
 
-### 3. 手动标定流程
+### 4. 手动标定流程
 1. 启动所有节点
 2. 手动移动机械臂到不同位姿
 3. 收集标定数据
 4. 执行手眼标定或世界-机器人标定
 5. 验证标定结果
 
-### 4. 闭环控制
+### 5. 闭环控制
 1. 设置目标位姿
 2. 启动闭环控制服务
 3. 监控控制过程
