@@ -1,0 +1,19 @@
+<launch>
+  <!-- 机械臂 IP，接口风格与 jaka_openloop_bringup.launch 保持一致 -->
+  <arg name="ip" default="192.168.1.100"/>
+
+  <!-- 全局 /ip 参数，兼容以前可能会用到这个参数的节点 -->
+  <param name="/ip" value="$(arg ip)"/>
+
+  <!-- 启动基于 JAKA SDK 的驱动节点 -->
+  <node pkg="jaka_sdk_driver"
+        type="jaka_sdk_driver_node"
+        name="jaka_sdk_driver_node"
+        output="screen">
+
+    <!-- 传给 C++ 节点的私有参数 robot_ip -->
+    <param name="robot_ip"  value="$(arg ip)"/>
+    <!-- joint_states 发布频率 -->
+    <param name="status_hz" value="50.0"/>
+  </node>
+</launch>
