@@ -6,8 +6,9 @@
 
 1. **视觉检测模块** - 使用ArUco标记检测物体位姿
 2. **手眼标定模块** - 标定相机坐标系到机械臂基坐标系的转换
-3. **闭环控制模块** - 基于视觉反馈的实时控制
-4. **机械臂驱动模块** - JAKA机械臂底层驱动
+3. **世界-机器人标定模块** - 标定世界坐标系到机械臂基坐标系的转换
+4. **闭环控制模块** - 基于视觉反馈的实时控制
+5. **机械臂驱动模块** - JAKA机械臂底层驱动
 
 ## 系统架构
 
@@ -19,22 +20,33 @@
 
 ## 标定流程
 
-### 1. 手眼标定
+### 1. 世界坐标系定义
 
-手眼标定是整个系统的关键步骤，用于建立相机坐标系与机械臂基坐标系之间的关系。
+首先通过`world_tag_node`定义世界坐标系，使用固定的ArUco标记作为世界坐标系原点。
+
+#### 世界坐标系标定步骤：
+
+1. **放置世界坐标系标靶**：在工作区域放置一个固定且可见的ArUco标记作为世界坐标系原点
+2. **配置世界坐标系节点**：
+   ```bash
+   roslaunch jaka_close_contro world_tag_bringup.launch
+   ```
+3. **验证世界坐标系**：确保相机-世界坐标系的TF变换正确建立
+
+### 2. 手眼标定
+
+手眼标定用于建立相机坐标系与机械臂末端执行器之间的关系。
 
 #### 标定步骤：
 
-1. **准备标定板**：使用ArUco标记作为标定板，固定在机械臂末端或工作区域
-
+1. **准备标定工具**：将ArUco标记固定在机械臂末端，或使用立方体标靶
 2. **启动系统**：
    ```bash
-   roslaunch jaka_vision_control closed_loop_system.launch
+   roslaunch jaka_close_contro full_system.launch
    ```
-
 3. **收集数据点**：
    - 将机械臂移动到不同的位姿
-   - 确保相机能清晰看到ArUco标记
+   - 确保相机能清晰看到标定工具
    - 每个位姿下运行服务收集数据：
    ```bash
    rosservice call /collect_calibration_data "{}"
@@ -46,14 +58,37 @@
    rosservice call /calibrate_hand_eye "{}"
    ```
 
+### 3. 世界-机器人标定
+
+新增了世界坐标系与机械臂基座标系之间的标定功能，这是实现精确全局定位的关键步骤。
+
+#### 世界-机器人标定步骤：
+
+1. **确保系统正常运行**：
+   - 世界坐标系已通过`world_tag_node`正确定义
+   - 机械臂末端的立方体标靶位姿可通过`cube_multi_face_fusion_node`获取
+
+2. **启动世界-机器人标定节点**：
+   ```bash
+   roslaunch jaka_close_contro world_robot_calibration.launch
+   ```
+
+3. **收集标定数据**：
+   - 移动机械臂到不同的位姿
+   - 运行服务收集数据点：
+   ```bash
+   rosservice call /collect_world_robot_calibration_data "{}"
+   ```
+   - 重复此过程至少5次，确保覆盖工作空间的不同区域
+
+4. **执行标定**：
+   ```bash
+   rosservice call /calibrate_world_robot "{}"
+   ```
+
 5. **验证标定结果**：
-   - 移动机械臂到不同位置
-   - 检查检测到的物体位姿是否与实际相符
-   - 如有偏差，重复标定过程
-
-### 2. 物体位姿标定
-
-标定正方体中心到ArUco标记的偏移关系。
+   - 检查标定结果的合理性
+   - 通过移动机械臂并检查世界坐标系下的位姿一致性来验证
 
 ## 闭环控制流程
 
@@ -98,6 +133,19 @@ rosservice call /start_closed_loop_control "{}"
   - `/collect_calibration_data` - 收集标定数据
   - `/calibrate_hand_eye` - 执行手眼标定
 
+### world_robot_calibration_node
+- **功能**：执行世界坐标系-机械臂基座标系标定
+- **订阅**：
+  - `/cube_center_fused` - 立方体中心位姿
+  - `/joint_states` - 机械臂关节状态
+- **发布**：
+  - `/world_robot_calibration_result` - 标定结果
+- **服务**：
+  - `/collect_world_robot_calibration_data` - 收集标定数据
+  - `/calibrate_world_robot` - 执行世界-机器人标定
+- **服务客户端**：
+  - `/jaka_driver/joint_move` - 机械臂运动控制
+
 ### closed_loop_control_node
 - **功能**：执行闭环控制
 - **订阅**：
@@ -124,14 +172,20 @@ rosservice call /start_closed_loop_control "{}"
 /workspace/scripts/calibration_procedure.sh
 ```
 
-### 2. 手动标定流程
+### 2. 世界-机器人标定流程
+使用Python脚本进行标定：
+```bash
+python3 /workspace/scripts/calibrate_world_robot.py
+```
+
+### 3. 手动标定流程
 1. 启动所有节点
 2. 手动移动机械臂到不同位姿
 3. 收集标定数据
-4. 执行手眼标定
+4. 执行手眼标定或世界-机器人标定
 5. 验证标定结果
 
-### 3. 闭环控制
+### 4. 闭环控制
 1. 设置目标位姿
 2. 启动闭环控制服务
 3. 监控控制过程
@@ -145,7 +199,7 @@ rosservice call /start_closed_loop_control "{}"
 - 控制频率：10Hz
 
 ### 标定参数
-- 数据点数量：建议≥10个
+- 数据点数量：建议≥10个（手眼标定）或≥5个（世界-机器人标定）
 - 标定板尺寸：根据实际ArUco标记大小设置
 
 ## 注意事项
@@ -154,11 +208,12 @@ rosservice call /start_closed_loop_control "{}"
 2. **标定精度**：标定质量直接影响控制精度
 3. **视觉检测**：确保相机视野内始终有可见的标记
 4. **机械臂状态**：确保机械臂处于安全工作状态
+5. **坐标系一致性**：确保所有坐标系定义一致
 
 ## 故障排除
 
 1. **检测不到标记**：检查相机参数和标记大小设置
-2. **控制精度低**：重新执行手眼标定
+2. **控制精度低**：重新执行手眼标定或世界-机器人标定
 3. **系统不稳定**：调整控制参数和频率
 4. **通信失败**：检查网络连接和IP配置
 
@@ -167,12 +222,15 @@ rosservice call /start_closed_loop_control "{}"
 ```
 /workspace/
 ├── src/
-│   ├── calibration_node.cpp      # 标定节点
-│   └── closed_loop_control_node.cpp # 闭环控制节点
+│   ├── calibration_node.cpp              # 标定节点
+│   ├── world_robot_calibration_node.cpp  # 世界-机器人标定节点
+│   └── closed_loop_control_node.cpp      # 闭环控制节点
 ├── launch/
-│   └── closed_loop_system.launch # 系统启动文件
+│   ├── closed_loop_system.launch         # 系统启动文件
+│   └── world_robot_calibration.launch    # 世界-机器人标定启动文件
 ├── scripts/
-│   └── calibration_procedure.sh  # 标定流程脚本
-├── CMakeLists.txt               # 编译配置
-└── README.md                   # 本说明文档
+│   ├── calibration_procedure.sh          # 标定流程脚本
+│   └── calibrate_world_robot.py          # 世界-机器人标定脚本
+├── CMakeLists.txt                        # 编译配置
+└── README.md                            # 本说明文档
 ```

@@ -1,0 +1,15 @@
+<launch>
+  <!-- World-Robot标定节点 -->
+  <node name="world_robot_calibration_node" pkg="jaka_close_contro" type="world_robot_calibration_node" output="screen">
+    <param name="world_frame" value="world" />
+    <param name="robot_base_frame" value="jaka_base_link" />
+    <param name="tool_frame" value="jaka_tool" />
+    <param name="camera_frame" value="zed2i_left_camera_optical_frame" />
+    <param name="cube_frame" value="cube_center" />
+  </node>
+  
+  <!-- 服务调用示例 -->
+  <!-- 
+  <node name="calibration_client_example" pkg="jaka_close_contro" type="calibration_client_example.py" output="screen" />
+  -->
+</launch>

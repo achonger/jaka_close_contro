@@ -95,6 +95,14 @@ target_link_libraries(closed_loop_control_node
   ${EIGEN3_LIBRARIES}
 )
 
+# 7. 世界-机器人标定节点
+add_executable(world_robot_calibration_node src/world_robot_calibration_node.cpp)
+target_link_libraries(world_robot_calibration_node
+  ${catkin_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
+  ${EIGEN3_LIBRARIES}
+)
+
 # 安装配置文件
 install(DIRECTORY launch config
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
