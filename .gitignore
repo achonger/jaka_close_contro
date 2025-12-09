@@ -1,4 +1,5 @@
 ```
+<<<<<<< HEAD
 # Compiled and build artifacts
 *.o
 *.obj
@@ -40,4 +41,8 @@ htmlcov/
 # System files
 .DS_Store
 Thumbs.db
+=======
+# Backup files
+*.backup
+>>>>>>> qwen-code-41ceff9c-17ea-4719-885d-ce07af9dc95a
 ```
