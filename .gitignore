@@ -4,26 +4,47 @@ build/
 dist/
 *.o
 *.obj
+*.a
+*.so
+*.dll
+*.exe
 *.out
 
 # Dependencies
+node_modules/
 venv/
 .venv/
 __pycache__/
 *.egg-info/
+.Python
+
+# CMake specific
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
 
 # Logs and temp files
 *.log
 *.tmp
+*.swp
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # Environment
 .env
 .env.local
 *.env.*
 
-# Editors
-.vscode/
-.idea/
+# Coverage
+coverage/
+htmlcov/
+.coverage
 
 # OS
 .DS_Store

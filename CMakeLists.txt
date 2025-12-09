@@ -16,6 +16,7 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   fiducial_msgs
   zed_wrapper
+  jaka_sdk_driver
 )
 
 find_package(OpenCV REQUIRED)
@@ -34,6 +35,7 @@ catkin_package(
     cv_bridge 
     fiducial_msgs 
     zed_wrapper
+    jaka_sdk_driver
   INCLUDE_DIRS include
   LIBRARIES ${PROJECT_NAME}
 )
