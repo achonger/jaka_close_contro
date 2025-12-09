@@ -78,7 +78,19 @@
     <param name="timeout_sec"            value="0.5"/>
   </node>
 
-  <!-- 6. 世界-机器人标定节点；在手眼标定完成后用于 world -> robot_base 对齐 -->
+  <!-- 6. 手眼标定节点：提供 /collect_calibration_data 与 /calibrate_hand_eye 服务 -->
+  <node pkg="jaka_close_contro"
+        type="calibration_node"
+        name="calibration_node"
+        output="screen">
+    <param name="world_fiducial_topic" value="/world_fiducials" />
+    <param name="world_fiducial_id"    value="0" />
+    <param name="robot_base_frame"     value="jaka_base_link" />
+    <param name="tool_frame"           value="jaka_tool" />
+    <param name="camera_frame"         value="zed2i_left_camera_optical_frame" />
+  </node>
+
+  <!-- 7. 世界-机器人标定节点；在手眼标定完成后用于 world -> robot_base 对齐 -->
   <node pkg="jaka_close_contro"
         type="world_robot_calibration_node"
         name="world_robot_calibration_node"

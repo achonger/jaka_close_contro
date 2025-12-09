@@ -64,8 +64,16 @@ target_link_libraries(fiducial_relay_node
 
 # 3. 世界坐标系定义
 add_executable(world_tag_node src/world_tag_node.cpp)
-target_link_libraries(world_tag_node 
+target_link_libraries(world_tag_node
   ${catkin_LIBRARIES}
+)
+
+# 手眼标定节点
+add_executable(calibration_node src/calibration_node.cpp)
+target_link_libraries(calibration_node
+  ${catkin_LIBRARIES}
+  ${OpenCV_LIBS}
+  ${YAML_CPP_LIBRARIES}
 )
 
 # 4. 末端正方体多面融合 (关键修正)

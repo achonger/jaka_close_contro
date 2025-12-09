@@ -123,10 +123,10 @@ rosservice call /start_closed_loop_control "{}"
 ### calibration_node
 - **功能**：执行手眼标定
 - **订阅**：
-  - `/aruco/markers` - ArUco标记检测结果
-  - `/joint_states` - 机械臂关节状态
+  - `/world_fiducials` - 世界标记的 ArUco 检测结果（来自 fiducial_relay_node）
+  - `/joint_states` - 机械臂关节状态（来自 jaka_sdk_driver_node）
 - **发布**：
-  - `/calibration_result` - 标定结果
+  - `/hand_eye_calibration_result` - 标定结果（同时广播 TF）
 - **服务**：
   - `/collect_calibration_data` - 收集标定数据
   - `/calibrate_hand_eye` - 执行手眼标定
