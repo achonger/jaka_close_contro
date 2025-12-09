@@ -281,7 +281,8 @@ Eigen::Matrix4d calculateRobotPose(const sensor_msgs::JointState& joint_state)
         quat.normalize();
         
         geometry_msgs::PoseStamped result;
-        result.header.frame_id = "world";
+        // 使用参数指定的世界坐标系名称，避免硬编码导致的 TF 不一致
+        result.header.frame_id = world_frame_;
         result.header.stamp = ros::Time::now();
         result.pose.position.x = t_world_robot_base.x();
         result.pose.position.y = t_world_robot_base.y();
