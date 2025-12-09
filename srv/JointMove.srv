@@ -1,0 +1,15 @@
+# 请求：基本仿照你之前 call /jaka_driver/joint_move 的字段
+float64[] pose        # 6 轴关节目标，单位：rad（推荐）
+bool     has_ref      # 是否相对 ref_joint 运动
+float64[] ref_joint   # 参考关节角，长度 6
+float64  mvvelo       # 速度
+float64  mvacc        # 加速度
+float64  mvtime       # 预留，可不使用
+float64  mvradii      # 圆弧半径，直线/关节插补时可不管
+int32    coord_mode   # 0: 关节空间；其他模式可以忽略
+int32    index        # 预留
+
+---
+# 响应
+int32   ret           # 0 表示成功，其它为 SDK 返回码
+string  message       # 文本说明
