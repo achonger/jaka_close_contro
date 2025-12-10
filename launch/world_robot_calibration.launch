@@ -82,6 +82,7 @@
     <param name="max_step_pos"           value="0.03"/>
     <param name="max_step_deg"           value="15.0"/>
     <param name="timeout_sec"            value="0.5"/>
+    <param name="publish_tool_tf"        value="false"/>
   </node>
 
   <!-- 6. 世界-机器人标定节点（直接估计 world -> robot_base） -->
