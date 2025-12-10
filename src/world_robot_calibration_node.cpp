@@ -160,9 +160,9 @@ private:
     world_cube_rotations_.push_back(Eigen::Quaterniond(T_world_cube_meas.rotation()));
 
     const size_t idx = base_cube_positions_.size();
-    const Eigen::Vector3d &p_w = T_world_cube_meas.translation();
+    const Eigen::Vector3d p_w = T_world_cube_meas.translation();
     const Eigen::Quaterniond q_w(T_world_cube_meas.rotation());
-    const Eigen::Vector3d &p_b = T_base_cube_pred.translation();
+    const Eigen::Vector3d p_b = T_base_cube_pred.translation();
     const Eigen::Quaterniond q_b(T_base_cube_pred.rotation());
 
     ROS_INFO_STREAM("[WorldRobot] 采集样本 #" << idx
