@@ -1,0 +1,6 @@
+# 请求为空，调用时使用 rosservice call /solve_world_robot_calibration "{}"
+---
+bool success
+string message
+geometry_msgs/Vector3 translation
+geometry_msgs/Quaternion rotation

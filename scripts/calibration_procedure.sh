@@ -14,8 +14,8 @@ echo ""
 read -p "请确认已准备好标定环境，按回车继续..."
 
 echo ""
-echo "步骤2: 启动标定相关节点"
-echo "roslaunch jaka_close_contro hand_eye_calibration.launch"
+echo "步骤2: 启动世界-机器人标定相关节点"
+echo "roslaunch jaka_close_contro world_robot_calibration.launch"
 echo ""
 echo "注意: 在新终端中运行上述命令启动系统"
 read -p "系统启动完成后按回车继续..."
@@ -30,7 +30,7 @@ do
     echo "数据点 $i/10"
     read -p "将机械臂移动到新位姿并确保能检测到标记，完成后输入 'c' 收集数据: " input
     if [ "$input" = "c" ]; then
-        rosservice call /collect_calibration_data "{}"
+        rosservice call /collect_world_robot_sample "{}"
         echo "数据点 $i 已收集"
     else
         echo "跳过数据点 $i"
@@ -38,13 +38,13 @@ do
 done
 
 echo ""
-echo "步骤4: 执行手眼标定"
+echo "步骤4: 求解 world->base 外参"
 read -p "所有数据收集完成后，按回车执行标定: "
-rosservice call /calibrate_hand_eye "{}"
+rosservice call /solve_world_robot_calibration "{}"
 
 echo ""
 echo "步骤5: 验证标定结果"
-echo "移动机械臂到不同位置，观察检测到的物体位姿是否与实际相符"
+echo "查看日志输出的 static_transform_publisher 示例，或在 RViz 中查看 world->base TF 是否合理"
 read -p "验证完成后按回车继续..."
 
 echo ""
