@@ -98,6 +98,24 @@ private:
   {
     latest_cube_pose_ = *msg;
     has_cube_pose_ = true;
+
+    geometry_msgs::TransformStamped T_world_cam_msg;
+    if (!lookupTransform(world_frame_, camera_frame_, msg->header.stamp, T_world_cam_msg))
+    {
+      return;
+    }
+
+    Eigen::Isometry3d T_world_cam = transformToEigen(T_world_cam_msg.transform);
+    Eigen::Isometry3d T_cam_cube = poseToEigen(msg->pose);
+    Eigen::Isometry3d T_world_cube = T_world_cam * T_cam_cube;
+
+    Eigen::Vector3d p_w = T_world_cube.translation();
+    Eigen::Quaterniond q_w(T_world_cube.rotation());
+    q_w.normalize();
+
+    ROS_INFO_STREAM_THROTTLE(0.5, "[WorldRobotCalib] cube in world:\n"
+                                   << "  pos  = (" << p_w.x() << ", " << p_w.y() << ", " << p_w.z() << ")\n"
+                                   << "  quat = (" << q_w.x() << ", " << q_w.y() << ", " << q_w.z() << ", " << q_w.w() << ")");
   }
 
   bool collectSample(std_srvs::Trigger::Request &, std_srvs::Trigger::Response &res)
@@ -141,9 +159,24 @@ private:
     world_cube_positions_.push_back(T_world_cube_meas.translation());
     world_cube_rotations_.push_back(Eigen::Quaterniond(T_world_cube_meas.rotation()));
 
+    const size_t idx = base_cube_positions_.size();
+    const Eigen::Vector3d &p_w = T_world_cube_meas.translation();
+    const Eigen::Quaterniond q_w(T_world_cube_meas.rotation());
+    const Eigen::Vector3d &p_b = T_base_cube_pred.translation();
+    const Eigen::Quaterniond q_b(T_base_cube_pred.rotation());
+
+    ROS_INFO_STREAM("[WorldRobot] 采集样本 #" << idx
+                                            << "\n  world_cube_meas.pos  = ("
+                                            << p_w.x() << ", " << p_w.y() << ", " << p_w.z() << ")"
+                                            << "\n  world_cube_meas.quat = ("
+                                            << q_w.x() << ", " << q_w.y() << ", " << q_w.z() << ", " << q_w.w() << ")"
+                                            << "\n  base_cube_pred.pos   = ("
+                                            << p_b.x() << ", " << p_b.y() << ", " << p_b.z() << ")"
+                                            << "\n  base_cube_pred.quat  = ("
+                                            << q_b.x() << ", " << q_b.y() << ", " << q_b.z() << ", " << q_b.w() << ")");
+
     res.success = true;
     res.message = "采样成功，当前样本数=" + std::to_string(base_cube_positions_.size());
-    ROS_INFO("[WorldRobot] 采集样本 #%zu", base_cube_positions_.size());
     return true;
   }
 
