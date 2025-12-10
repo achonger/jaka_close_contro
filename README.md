@@ -68,6 +68,15 @@
 
 新增了世界坐标系与机械臂基座标系之间的标定功能，这是实现精确全局定位的关键步骤。
 
+> 如果你的世界坐标系由固定的“大世界板”(ArUco Tag ID=0) 定义，且 `aruco_detect_world` 持续发布 `world -> camera` 的 TF，那么闭环控制只需 **世界-机器人标定** 即可，不必额外做传统“相机→机械臂”手眼标定：
+> 
+> 1. 每帧从世界板直接得到 `T_world_camera(t)`；
+> 2. 多面融合给出 `T_camera_cube(t)`；
+> 3. 世界-机器人标定求得固定的 `T_world_base`；
+> 4. 计算 `T_base_cube(t) = T_base_world · T_world_camera(t) · T_camera_cube(t)`，即可得到机械臂基坐标下的立方体位姿。
+> 
+> 本仓库的 `closed_loop_control_node` 已按上述链路实现：从标定文件读取 `world -> base`，再结合在线 TF `world -> camera` 完成坐标换算。
+
 #### 世界-机器人标定步骤：
 
 1. **确保系统正常运行**：
