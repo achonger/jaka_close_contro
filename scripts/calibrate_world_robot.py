@@ -7,8 +7,7 @@
 import rospy
 import sys
 import time
-from std_srvs.srv import Trigger, TriggerRequest
-from jaka_close_contro.srv import WorldRobotCalibration
+from jaka_close_contro.srv import WorldRobotCalibration, WorldRobotCollectSample, WorldRobotCollectSampleRequest
 from jaka_sdk_driver.srv import JointMove, JointMoveRequest
 
 class WorldRobotCalibrationClient:
@@ -16,7 +15,7 @@ class WorldRobotCalibrationClient:
         rospy.init_node('world_robot_calibration_client', anonymous=True)
         
         # 服务代理
-        self.collect_data_srv = rospy.ServiceProxy('/collect_world_robot_sample', Trigger)
+        self.collect_data_srv = rospy.ServiceProxy('/collect_world_robot_sample', WorldRobotCollectSample)
         self.calibrate_srv = rospy.ServiceProxy('/solve_world_robot_calibration', WorldRobotCalibration)
         self.joint_move_srv = rospy.ServiceProxy('/jaka_driver/joint_move', JointMove)
 
@@ -73,9 +72,13 @@ class WorldRobotCalibrationClient:
             
             # 收集数据点
             try:
-                response = self.collect_data_srv(TriggerRequest())
+                response = self.collect_data_srv(WorldRobotCollectSampleRequest())
                 if response.success:
                     print(f"Successfully collected data point {i+1}")
+                    print(f"  world_cube pos: ({response.world_cube_pos_x:.3f}, {response.world_cube_pos_y:.3f}, {response.world_cube_pos_z:.3f})")
+                    print(f"  world_cube quat: ({response.world_cube_quat_x:.4f}, {response.world_cube_quat_y:.4f}, {response.world_cube_quat_z:.4f}, {response.world_cube_quat_w:.4f})")
+                    print(f"  base_cube  pos: ({response.base_cube_pos_x:.3f}, {response.base_cube_pos_y:.3f}, {response.base_cube_pos_z:.3f})")
+                    print(f"  base_cube  quat: ({response.base_cube_quat_x:.4f}, {response.base_cube_quat_y:.4f}, {response.base_cube_quat_z:.4f}, {response.base_cube_quat_w:.4f})")
                 else:
                     print(f"Failed to collect data point {i+1}: {response.message}")
             except rospy.ServiceException as e:

@@ -28,6 +28,7 @@ find_package(Ceres REQUIRED)
 
 add_service_files(FILES
   WorldRobotCalibration.srv
+  WorldRobotCollectSample.srv
 )
 
 generate_messages(
