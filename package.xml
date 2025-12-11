@@ -19,7 +19,11 @@
   <build_depend>cv_bridge</build_depend>
   <build_depend>fiducial_msgs</build_depend>
   <build_depend>zed_wrapper</build_depend>
+  <build_depend>jaka_msgs</build_depend>
   <build_depend>jaka_sdk_driver</build_depend>
+  <build_depend>std_srvs</build_depend>
+  <build_depend>message_generation</build_depend>
+  <build_depend>roslib</build_depend>
   
   <exec_depend>roscpp</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
@@ -30,7 +34,12 @@
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>fiducial_msgs</exec_depend>
   <exec_depend>zed_wrapper</exec_depend>
+  <exec_depend>jaka_msgs</exec_depend>
   <exec_depend>jaka_sdk_driver</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>message_runtime</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>roslib</exec_depend>
   
   <!-- 计算机视觉依赖 -->
   <build_depend>opencv3</build_depend>

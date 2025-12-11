@@ -87,10 +87,11 @@ public:
   : nh_(nh), pnh_(pnh),
     camera_frame_default_("zed2i_left_camera_optical_frame"),
     cube_frame_("cube_center"),
-    tool_frame_("jaka_tool"),
+    tool_frame_("Link_6"),
     has_prev_(false),
     has_prev_q_(false),
     has_tool_offset_(false),
+    publish_tool_tf_(false),
     tf_buffer_(),
     tf_listener_(tf_buffer_),
     tf_broadcaster_()  // 明确初始化
@@ -108,10 +109,12 @@ public:
     max_step_ang_ = max_deg * M_PI / 180.0;
     pnh_.param("timeout_sec", timeout_sec_, 0.5);
     pnh_.param("publish_frequency", publish_frequency_, 30.0);
+    pnh_.param("publish_tool_tf", publish_tool_tf_, false);
 
     ROS_INFO_STREAM("[Fusion] faces_yaml: " << faces_yaml_path_);
     ROS_INFO_STREAM("[Fusion] fiducial_topic: " << fiducial_topic_);
     ROS_INFO_STREAM("[Fusion] cube_frame: " << cube_frame_);
+    ROS_INFO("[Fusion] publish_tool_tf: %s", publish_tool_tf_ ? "true" : "false");
     ROS_INFO("[Fusion] Node started. Listening on %s", fiducial_topic_.c_str());
     if (faces_yaml_path_.empty() || !loadFacesYaml(faces_yaml_path_)) {
       ROS_ERROR("[Fusion] Failed to load faces YAML. Exiting.");
@@ -440,18 +443,18 @@ private:
       pub_.publish(pmsg);
     }
 
-    // 2. 发布 jaka_tool (机械臂法兰 = 立方体中心 + tool_offset)
-    if (has_tool_offset_) {
+    // 2. 可选：发布视觉工具帧（仅在需要视觉末端 TF 时开启）
+    if (publish_tool_tf_ && has_tool_offset_) {
       tf2::Transform T_tool = T_cube * tool_offset_;  // T_cam_tool = T_cam_cube * T_cube_tool
-      
+
       geometry_msgs::TransformStamped tf_tool;
       tf_tool.header.stamp = stamp;
       tf_tool.header.frame_id = cam_frame;
       tf_tool.child_frame_id = tool_frame_;
       tf_tool.transform = tf2::toMsg(T_tool);
       tf_broadcaster_.sendTransform(tf_tool);
-      
-      ROS_DEBUG("[Fusion] Published tool frame at [%.3f,%.3f,%.3f]", 
+
+      ROS_DEBUG("[Fusion] Published tool frame at [%.3f,%.3f,%.3f]",
                 T_tool.getOrigin().x(), T_tool.getOrigin().y(), T_tool.getOrigin().z());
     }
 
@@ -481,6 +484,7 @@ private:
   std::string camera_frame_default_;
   std::string cube_frame_;
   std::string tool_frame_;
+  bool publish_tool_tf_;
 
   double alpha_pos_, alpha_rot_;
   double max_step_pos_, max_step_ang_, timeout_sec_;

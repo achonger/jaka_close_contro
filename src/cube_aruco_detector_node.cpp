@@ -12,6 +12,8 @@
 #include <Eigen/Geometry>
 #include <map>
 #include <vector>
+#include <sstream>
+#include <xmlrpcpp/XmlRpcValue.h>
 
 class CubeArucoDetector {
 public:
@@ -22,6 +24,7 @@ public:
     pnh_.param<std::string>("camera_info_topic", camera_info_topic_, "/zed2i/zed_node/left/camera_info");
     pnh_.param<std::string>("fiducial_topic", fiducial_topic_, "/fiducial_transforms");
     pnh_.param("default_marker_size", default_marker_size_, 0.04); // 默认40mm
+    pnh_.param<std::string>("dictionary", dictionary_name_, "DICT_4X4_50");
 
     // 读取多尺寸配置
     XmlRpc::XmlRpcValue marker_sizes_param;
@@ -30,10 +33,25 @@ public:
       if (marker_sizes_param.getType() == XmlRpc::XmlRpcValue::TypeStruct) {
         for (XmlRpc::XmlRpcValue::iterator it = marker_sizes_param.begin();
              it != marker_sizes_param.end(); ++it) {
-          int id = std::stoi(it->first);
-          double size = static_cast<double>(it->second);
-          marker_sizes_[id] = size;
-          ROS_INFO("[Detector] Marker ID=%d size=%.3f m", id, size);
+          try {
+            int id = std::stoi(it->first);
+
+            double size = 0.0;
+            if (it->second.getType() == XmlRpc::XmlRpcValue::TypeDouble) {
+              size = static_cast<double>(it->second);
+            } else if (it->second.getType() == XmlRpc::XmlRpcValue::TypeInt) {
+              size = static_cast<int>(it->second);
+            } else {
+              ROS_ERROR("[Detector] marker_sizes[%s] has non-numeric type, skip", it->first.c_str());
+              continue;
+            }
+
+            marker_sizes_[id] = size;
+            ROS_INFO("[Detector] Marker ID=%d size=%.3f m", id, size);
+          } catch (const std::exception& e) {
+            ROS_ERROR("[Detector] Failed to parse marker_sizes entry '%s': %s", it->first.c_str(), e.what());
+            continue;
+          }
         }
       }
     }
@@ -42,10 +60,19 @@ public:
     ROS_INFO_STREAM("[Detector] camera_info_topic: " << camera_info_topic_);
     ROS_INFO_STREAM("[Detector] fiducial_topic: " << fiducial_topic_);
 
-    // ArUco 配置 (固定使用 DICT_4X4_50)
-    dictionary_ = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_4X4_50);
+    // ArUco 配置
+    cv::aruco::PREDEFINED_DICTIONARY_NAME dict_id;
+    if (dictionary_name_ == "DICT_4X4_50") {
+      dict_id = cv::aruco::DICT_4X4_50;
+    } else if (dictionary_name_ == "DICT_4X4_100") {
+      dict_id = cv::aruco::DICT_4X4_100;
+    } else {
+      ROS_WARN("[Detector] Unknown dictionary '%s', fallback to DICT_4X4_50", dictionary_name_.c_str());
+      dict_id = cv::aruco::DICT_4X4_50;
+    }
+    dictionary_ = cv::aruco::getPredefinedDictionary(dict_id);
     detector_params_ = cv::aruco::DetectorParameters::create();
-    ROS_INFO("[Detector] Using ArUco dictionary DICT_4X4_50");
+    ROS_INFO("[Detector] Using ArUco dictionary %s", dictionary_name_.c_str());
 
     // 订阅与发布
     caminfo_sub_ = nh_.subscribe(camera_info_topic_, 1, &CubeArucoDetector::cameraInfoCallback, this);
@@ -177,6 +204,7 @@ private:
 
   cv::Ptr<cv::aruco::Dictionary> dictionary_;
   cv::Ptr<cv::aruco::DetectorParameters> detector_params_;
+  std::string dictionary_name_;
 
   double default_marker_size_;
   std::map<int, double> marker_sizes_;

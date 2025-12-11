@@ -8,15 +8,25 @@
 #include <std_srvs/Trigger.h>
 #include <jaka_sdk_driver/JointMove.h>
 #include <yaml-cpp/yaml.h>
+#include <ros/package.h>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <fstream>
+#include <string>
 
 class ClosedLoopControlNode
 {
 public:
-    ClosedLoopControlNode(ros::NodeHandle& nh) : tf_listener_(tf_buffer_)
+    ClosedLoopControlNode(ros::NodeHandle& nh, ros::NodeHandle& pnh) : tf_listener_(tf_buffer_)
     {
+        // 使用私有命名空间读取参数，避免与其他节点冲突
+        pnh.param<std::string>("base_frame", base_frame_, "Link_0");
+        pnh.param<std::string>("world_frame", world_frame_, "world");
+        pnh.param<std::string>("camera_frame", camera_frame_, "zed2i_left_camera_optical_frame");
+
+        const std::string default_output = ros::package::getPath("jaka_close_contro") + "/config/world_robot_calibration.yaml";
+        pnh.param<std::string>("world_robot_calibration_yaml", world_robot_yaml_path_, default_output);
+
         // 订阅ArUco标记检测结果
         marker_sub_ = nh.subscribe("/aruco/markers", 1, &ClosedLoopControlNode::markerCallback, this);
         
@@ -39,7 +49,7 @@ public:
         loadCalibrationResult();
         
         // 设置默认目标位姿
-        target_pose_.header.frame_id = "world";
+        target_pose_.header.frame_id = base_frame_;
         target_pose_.pose.position.x = 0.3;
         target_pose_.pose.position.y = 0.0;
         target_pose_.pose.position.z = 0.2;
@@ -58,13 +68,19 @@ private:
     ros::Publisher target_pose_pub_;
     ros::Publisher current_pose_pub_;
     ros::ServiceClient joint_move_client_;
-    
+
+    std::string base_frame_;
+    std::string world_frame_;
+    std::string camera_frame_;
+    std::string world_robot_yaml_path_;
+
     tf2_ros::Buffer tf_buffer_;
     tf2_ros::TransformListener tf_listener_;
     
     geometry_msgs::PoseStamped target_pose_;
     geometry_msgs::PoseStamped current_object_pose_;
-    Eigen::Isometry3d camera_to_robot_tf_; // 相机到机械臂的转换矩阵
+    Eigen::Isometry3d world_to_base_tf_ = Eigen::Isometry3d::Identity(); // 世界到机械臂基座
+    bool has_world_to_base_tf_ = false;
     sensor_msgs::JointState current_joint_state_;
     aruco_msgs::MarkerArray current_markers_;
     
@@ -146,36 +162,70 @@ private:
 
     geometry_msgs::PoseStamped transformPoseToRobotBase(const geometry_msgs::PoseStamped& camera_pose)
     {
-        // 将相机坐标系下的位姿转换到机械臂基坐标系
         geometry_msgs::PoseStamped robot_pose;
         robot_pose.header = camera_pose.header;
-        robot_pose.header.frame_id = "base_link";
-        
-        // 使用Eigen进行坐标变换
-        Eigen::Vector3d camera_translation(camera_pose.pose.position.x, 
-                                          camera_pose.pose.position.y, 
-                                          camera_pose.pose.position.z);
-        Eigen::Quaterniond camera_rotation(camera_pose.pose.orientation.w,
-                                          camera_pose.pose.orientation.x,
-                                          camera_pose.pose.orientation.y,
-                                          camera_pose.pose.orientation.z);
-        
-        Eigen::Isometry3d camera_pose_tf = Eigen::Isometry3d::Identity();
-        camera_pose_tf.translate(camera_translation);
-        camera_pose_tf.rotate(camera_rotation);
-        
-        Eigen::Isometry3d robot_pose_tf = camera_to_robot_tf_ * camera_pose_tf;
-        
-        robot_pose.pose.position.x = robot_pose_tf.translation().x();
-        robot_pose.pose.position.y = robot_pose_tf.translation().y();
-        robot_pose.pose.position.z = robot_pose_tf.translation().z();
-        
-        Eigen::Quaterniond robot_quat(robot_pose_tf.rotation());
-        robot_pose.pose.orientation.w = robot_quat.w();
-        robot_pose.pose.orientation.x = robot_quat.x();
-        robot_pose.pose.orientation.y = robot_quat.y();
-        robot_pose.pose.orientation.z = robot_quat.z();
-        
+        robot_pose.header.frame_id = base_frame_;
+
+        if (!has_world_to_base_tf_)
+        {
+            ROS_WARN_THROTTLE(5.0, "[ClosedLoop] 尚未加载世界-机器人标定，使用单位变换");
+        }
+
+        try
+        {
+            // 获取世界到相机的在线 TF（由大世界板提供）
+            const geometry_msgs::TransformStamped T_world_camera_msg =
+                tf_buffer_.lookupTransform(world_frame_, camera_frame_, ros::Time(0), ros::Duration(1.0));
+
+            // Eigen 转换
+            Eigen::Isometry3d world_to_camera_tf = Eigen::Isometry3d::Identity();
+            world_to_camera_tf.translation() = Eigen::Vector3d(
+                T_world_camera_msg.transform.translation.x,
+                T_world_camera_msg.transform.translation.y,
+                T_world_camera_msg.transform.translation.z);
+            Eigen::Quaterniond world_cam_quat(
+                T_world_camera_msg.transform.rotation.w,
+                T_world_camera_msg.transform.rotation.x,
+                T_world_camera_msg.transform.rotation.y,
+                T_world_camera_msg.transform.rotation.z);
+            world_to_camera_tf.rotate(world_cam_quat);
+
+            // 相机观测的立方体位姿
+            Eigen::Isometry3d camera_pose_tf = Eigen::Isometry3d::Identity();
+            camera_pose_tf.translation() = Eigen::Vector3d(
+                camera_pose.pose.position.x,
+                camera_pose.pose.position.y,
+                camera_pose.pose.position.z);
+            Eigen::Quaterniond camera_rot(
+                camera_pose.pose.orientation.w,
+                camera_pose.pose.orientation.x,
+                camera_pose.pose.orientation.y,
+                camera_pose.pose.orientation.z);
+            camera_pose_tf.rotate(camera_rot);
+
+            // world -> cube
+            Eigen::Isometry3d world_to_cube_tf = world_to_camera_tf * camera_pose_tf;
+
+            // base -> cube = (base<-world) * (world->cube)
+            Eigen::Isometry3d base_to_cube_tf = world_to_base_tf_.inverse() * world_to_cube_tf;
+
+            robot_pose.pose.position.x = base_to_cube_tf.translation().x();
+            robot_pose.pose.position.y = base_to_cube_tf.translation().y();
+            robot_pose.pose.position.z = base_to_cube_tf.translation().z();
+
+            Eigen::Quaterniond robot_quat(base_to_cube_tf.rotation());
+            robot_pose.pose.orientation.w = robot_quat.w();
+            robot_pose.pose.orientation.x = robot_quat.x();
+            robot_pose.pose.orientation.y = robot_quat.y();
+            robot_pose.pose.orientation.z = robot_quat.z();
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            ROS_ERROR_THROTTLE(5.0, "[ClosedLoop] 查询 TF world->camera 失败: %s", ex.what());
+            // 保持零位姿，提示上层不要继续使用
+            robot_pose.pose.orientation.w = 1.0;
+        }
+
         return robot_pose;
     }
 
@@ -212,7 +262,7 @@ private:
     geometry_msgs::PoseStamped calculateControlCommand()
     {
         geometry_msgs::PoseStamped command;
-        command.header.frame_id = "base_link";
+        command.header.frame_id = base_frame_;
         command.header.stamp = ros::Time::now();
         
         // 简单的比例控制器
@@ -281,24 +331,31 @@ private:
     void loadCalibrationResult()
     {
         try {
-            YAML::Node config = YAML::LoadFile("/tmp/world_robot_calibration.yaml");
-            
-            double x = config["calibration_transform"]["position"]["x"].as<double>();
-            double y = config["calibration_transform"]["position"]["y"].as<double>();
-            double z = config["calibration_transform"]["position"]["z"].as<double>();
-            double qw = config["calibration_transform"]["orientation"]["w"].as<double>();
-            double qx = config["calibration_transform"]["orientation"]["x"].as<double>();
-            double qy = config["calibration_transform"]["orientation"]["y"].as<double>();
-            double qz = config["calibration_transform"]["orientation"]["z"].as<double>();
-            
-            camera_to_robot_tf_.translation() = Eigen::Vector3d(x, y, z);
+            YAML::Node config = YAML::LoadFile(world_robot_yaml_path_);
+            const auto& root = config["world_robot_calibration"];
+            if (!root)
+            {
+                throw YAML::Exception(YAML::Mark::null_mark(), "缺少 world_robot_calibration 字段");
+            }
+
+            double x = root["position"]["x"].as<double>();
+            double y = root["position"]["y"].as<double>();
+            double z = root["position"]["z"].as<double>();
+            double qw = root["orientation"]["w"].as<double>();
+            double qx = root["orientation"]["x"].as<double>();
+            double qy = root["orientation"]["y"].as<double>();
+            double qz = root["orientation"]["z"].as<double>();
+
+            world_to_base_tf_.translation() = Eigen::Vector3d(x, y, z);
             Eigen::Quaterniond quat(qw, qx, qy, qz);
-            camera_to_robot_tf_.linear() = quat.matrix();
-            
-            ROS_INFO("Calibration result loaded successfully");
+            world_to_base_tf_.linear() = quat.matrix();
+            has_world_to_base_tf_ = true;
+
+            ROS_INFO("已从 %s 载入世界→基座标定", world_robot_yaml_path_.c_str());
         } catch (const YAML::Exception& e) {
-            ROS_WARN("Could not load calibration file, using identity transform");
-            camera_to_robot_tf_ = Eigen::Isometry3d::Identity();
+            ROS_WARN("无法加载标定文件 %s，使用单位变换", world_robot_yaml_path_.c_str());
+            world_to_base_tf_ = Eigen::Isometry3d::Identity();
+            has_world_to_base_tf_ = false;
         }
     }
 };
@@ -306,9 +363,10 @@ private:
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "closed_loop_control_node");
-    ros::NodeHandle nh("~");
-    
-    ClosedLoopControlNode control_node(nh);
+    ros::NodeHandle nh;
+    ros::NodeHandle pnh("~");
+
+    ClosedLoopControlNode control_node(nh, pnh);
     
     ros::spin();
     return 0;

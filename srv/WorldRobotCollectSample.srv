@@ -1,0 +1,22 @@
+# 请求为空，调用时使用 rosservice call /collect_world_robot_sample "{}"
+---
+bool success
+string message
+
+# 世界坐标系下 cube 测量位姿（来自视觉）
+float64 world_cube_pos_x
+float64 world_cube_pos_y
+float64 world_cube_pos_z
+float64 world_cube_quat_x
+float64 world_cube_quat_y
+float64 world_cube_quat_z
+float64 world_cube_quat_w
+
+# 机器人基座坐标系下 cube 预测位姿（来自机器人模型）
+float64 base_cube_pos_x
+float64 base_cube_pos_y
+float64 base_cube_pos_z
+float64 base_cube_quat_x
+float64 base_cube_quat_y
+float64 base_cube_quat_z
+float64 base_cube_quat_w

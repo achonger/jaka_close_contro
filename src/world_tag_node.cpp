@@ -1,6 +1,6 @@
 // world_tag_node.cpp
 // 集成到 jaka_close_contro 包
-// 修正后的 TF 方向 (无需求逆)
+// fiducial_msgs::FiducialTransform 表示 camera->fiducial，这里需要取逆得到 world->camera
 
 #include <ros/ros.h>
 #include <fiducial_msgs/FiducialTransformArray.h>
@@ -60,9 +60,11 @@ private:
     );
     rotation.normalize();
 
-    tf2::Transform T_world_cam;
-    T_world_cam.setOrigin(origin);
-    T_world_cam.setRotation(rotation);
+    // fiducial_msgs::FiducialTransform 表示 camera->fiducial，这里需要取逆得到 world->camera
+    tf2::Transform T_cam_world;
+    T_cam_world.setOrigin(origin);
+    T_cam_world.setRotation(rotation);
+    tf2::Transform T_world_cam = T_cam_world.inverse();
 
     if (!has_prev_) {
       prev_T_world_cam_ = T_world_cam;
