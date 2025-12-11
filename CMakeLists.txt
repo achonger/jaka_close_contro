@@ -104,6 +104,20 @@ target_link_libraries(closed_loop_control_node
   ${EIGEN3_LIBRARIES}
 )
 
+# 6. 世界-机器人外参发布器
+add_executable(world_robot_extrinsic_broadcaster_node src/world_robot_extrinsic_broadcaster_node.cpp)
+target_link_libraries(world_robot_extrinsic_broadcaster_node
+  ${catkin_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
+)
+
+# 6+. 世界系闭环观测/控制节点
+add_executable(cube_world_closedloop_node src/cube_world_closedloop_node.cpp)
+target_link_libraries(cube_world_closedloop_node
+  ${catkin_LIBRARIES}
+  ${EIGEN3_LIBRARIES}
+)
+
 # 7. 世界-机器人标定节点
 add_executable(world_robot_calibration_node src/world_robot_calibration_node.cpp)
 target_link_libraries(world_robot_calibration_node
