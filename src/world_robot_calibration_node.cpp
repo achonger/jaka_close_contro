@@ -8,6 +8,7 @@
 #include <vector>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+#include <cmath>
 #include <yaml-cpp/yaml.h>
 #include <ros/package.h>
 
@@ -258,6 +259,14 @@ private:
     res.rotation.z = q_wb.z();
     res.rotation.w = q_wb.w();
 
+    tf2::Transform T_WB_est;
+    tf2::Quaternion q_tf(q_wb.x(), q_wb.y(), q_wb.z(), q_wb.w());
+    q_tf.normalize();
+    T_WB_est.setRotation(q_tf);
+    T_WB_est.setOrigin(tf2::Vector3(t_wb.x(), t_wb.y(), t_wb.z()));
+
+    computeAndPrintResidualStats(T_WB_est);
+
     return true;
   }
 
@@ -379,6 +388,137 @@ private:
     {
       ROS_ERROR("[WorldRobot] 保存标定文件失败: %s", e.what());
     }
+  }
+
+  void computeAndPrintResidualStats(const tf2::Transform &T_WB_est)
+  {
+    const size_t N = base_cube_positions_.size();
+    if (N == 0)
+    {
+      ROS_WARN("[WorldRobot] 无样本可计算残差统计");
+      return;
+    }
+    if (N < 2)
+    {
+      ROS_WARN("[WorldRobot] 样本不足，无法计算有效统计量 (N=%zu)", N);
+      return;
+    }
+
+    std::vector<double> pos_errs;
+    std::vector<double> rot_errs_deg;
+    std::vector<double> extrinsic_disp_pos;
+    std::vector<double> extrinsic_disp_rot_deg;
+    pos_errs.reserve(N);
+    rot_errs_deg.reserve(N);
+    extrinsic_disp_pos.reserve(N);
+    extrinsic_disp_rot_deg.reserve(N);
+
+    for (size_t i = 0; i < N; ++i)
+    {
+      tf2::Transform T_W_cube_meas;
+      tf2::Quaternion q_w(world_cube_rotations_[i].x(), world_cube_rotations_[i].y(), world_cube_rotations_[i].z(), world_cube_rotations_[i].w());
+      q_w.normalize();
+      T_W_cube_meas.setOrigin(tf2::Vector3(world_cube_positions_[i].x(), world_cube_positions_[i].y(), world_cube_positions_[i].z()));
+      T_W_cube_meas.setRotation(q_w);
+
+      tf2::Transform T_B_cube_pred;
+      tf2::Quaternion q_b(base_cube_rotations_[i].x(), base_cube_rotations_[i].y(), base_cube_rotations_[i].z(), base_cube_rotations_[i].w());
+      q_b.normalize();
+      T_B_cube_pred.setOrigin(tf2::Vector3(base_cube_positions_[i].x(), base_cube_positions_[i].y(), base_cube_positions_[i].z()));
+      T_B_cube_pred.setRotation(q_b);
+
+      tf2::Transform T_W_cube_pred = T_WB_est * T_B_cube_pred;
+      tf2::Transform T_err = T_W_cube_pred.inverse() * T_W_cube_meas;
+
+      tf2::Vector3 t_err = T_err.getOrigin();
+      double e_t = t_err.length();
+      tf2::Quaternion q_err = T_err.getRotation();
+      q_err.normalize();
+      double e_R = q_err.getAngle() * 180.0 / M_PI;
+
+      tf2::Transform T_B_cube_pred_inv = T_B_cube_pred.inverse();
+      tf2::Transform T_WB_i = T_W_cube_meas * T_B_cube_pred_inv;
+      tf2::Transform T_disp = T_WB_est.inverse() * T_WB_i;
+      tf2::Vector3 t_disp = T_disp.getOrigin();
+      double e_t_disp = t_disp.length();
+      tf2::Quaternion q_disp = T_disp.getRotation();
+      q_disp.normalize();
+      double e_R_disp = q_disp.getAngle() * 180.0 / M_PI;
+
+      pos_errs.push_back(e_t);
+      rot_errs_deg.push_back(e_R);
+      extrinsic_disp_pos.push_back(e_t_disp);
+      extrinsic_disp_rot_deg.push_back(e_R_disp);
+    }
+
+    auto computeStats = [](const std::vector<double> &v,
+                           double &mean, double &stddev,
+                           double &rmse, double &maxv)
+    {
+      const size_t n = v.size();
+      if (n == 0)
+      {
+        mean = stddev = rmse = maxv = 0.0;
+        return;
+      }
+      double sum = 0.0;
+      double sum_sq = 0.0;
+      maxv = 0.0;
+      for (double x : v)
+      {
+        sum += x;
+        sum_sq += x * x;
+        if (x > maxv)
+        {
+          maxv = x;
+        }
+      }
+      mean = sum / static_cast<double>(n);
+      rmse = std::sqrt(sum_sq / static_cast<double>(n));
+      if (n > 1)
+      {
+        double var = 0.0;
+        for (double x : v)
+        {
+          double d = x - mean;
+          var += d * d;
+        }
+        var /= static_cast<double>(n - 1);
+        stddev = std::sqrt(var);
+      }
+      else
+      {
+        stddev = 0.0;
+      }
+    };
+
+    double mean_pos, std_pos, rmse_pos, max_pos;
+    double mean_rot_deg, std_rot_deg, rmse_rot_deg, max_rot_deg;
+    double mean_disp_pos, std_disp_pos, rmse_disp_pos, max_disp_pos;
+    double mean_disp_rot_deg, std_disp_rot_deg, rmse_disp_rot_deg, max_disp_rot_deg;
+
+    computeStats(pos_errs, mean_pos, std_pos, rmse_pos, max_pos);
+    computeStats(rot_errs_deg, mean_rot_deg, std_rot_deg, rmse_rot_deg, max_rot_deg);
+    computeStats(extrinsic_disp_pos, mean_disp_pos, std_disp_pos, rmse_disp_pos, max_disp_pos);
+    computeStats(extrinsic_disp_rot_deg, mean_disp_rot_deg, std_disp_rot_deg, rmse_disp_rot_deg, max_disp_rot_deg);
+
+    ROS_INFO_STREAM("=== World-Robot Calibration Residuals (N=" << N << ") ===");
+    ROS_INFO_STREAM("Position residual | RMSE = " << rmse_pos << " m"
+                                                 << ", mean = " << mean_pos << " m"
+                                                 << ", std = " << std_pos << " m"
+                                                 << ", max = " << max_pos << " m");
+    ROS_INFO_STREAM("Orientation residual | RMSE = " << rmse_rot_deg << " deg"
+                                                     << ", mean = " << mean_rot_deg << " deg"
+                                                     << ", std = " << std_rot_deg << " deg"
+                                                     << ", max = " << max_rot_deg << " deg");
+    ROS_INFO_STREAM("Extrinsic dispersion (world->base) - translation | RMSE = " << rmse_disp_pos << " m"
+                                                                                 << ", mean = " << mean_disp_pos << " m"
+                                                                                 << ", std = " << std_disp_pos << " m"
+                                                                                 << ", max = " << max_disp_pos << " m");
+    ROS_INFO_STREAM("Extrinsic dispersion (world->base) - orientation | RMSE = " << rmse_disp_rot_deg << " deg"
+                                                                                 << ", mean = " << mean_disp_rot_deg << " deg"
+                                                                                 << ", std = " << std_disp_rot_deg << " deg"
+                                                                                 << ", max = " << max_disp_rot_deg << " deg");
   }
 
   void loadExistingCalibration()
