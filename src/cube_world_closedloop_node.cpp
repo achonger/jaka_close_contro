@@ -17,13 +17,24 @@ public:
     pnh.param<double>("cube_offset_z_m", cube_offset_z_m_, 0.077);
     pnh.param<std::string>("cube_topic", cube_topic_, std::string("/cube_center_fused"));
 
-    pnh.param<double>("target_world_x", target_pos_world_.x(), 0.0);
-    pnh.param<double>("target_world_y", target_pos_world_.y(), 0.0);
-    pnh.param<double>("target_world_z", target_pos_world_.z(), 0.0);
-    pnh.param<double>("target_world_qx", target_quat_world_.x(), 0.0);
-    pnh.param<double>("target_world_qy", target_quat_world_.y(), 0.0);
-    pnh.param<double>("target_world_qz", target_quat_world_.z(), 0.0);
-    pnh.param<double>("target_world_qw", target_quat_world_.w(), 1.0);
+    double target_x = target_pos_world_.x();
+    double target_y = target_pos_world_.y();
+    double target_z = target_pos_world_.z();
+    double target_qx = target_quat_world_.x();
+    double target_qy = target_quat_world_.y();
+    double target_qz = target_quat_world_.z();
+    double target_qw = target_quat_world_.w();
+
+    pnh.param<double>("target_world_x", target_x, 0.0);
+    pnh.param<double>("target_world_y", target_y, 0.0);
+    pnh.param<double>("target_world_z", target_z, 0.0);
+    pnh.param<double>("target_world_qx", target_qx, 0.0);
+    pnh.param<double>("target_world_qy", target_qy, 0.0);
+    pnh.param<double>("target_world_qz", target_qz, 0.0);
+    pnh.param<double>("target_world_qw", target_qw, 1.0);
+
+    target_pos_world_.setValue(target_x, target_y, target_z);
+    target_quat_world_.setValue(target_qx, target_qy, target_qz, target_qw);
     target_quat_world_.normalize();
 
     cube_sub_ = nh.subscribe(cube_topic_, 1, &CubeWorldClosedLoopNode::cubeCallback, this);
