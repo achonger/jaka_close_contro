@@ -109,8 +109,9 @@
         output="screen">
     <param name="arm_name"         value="jaka1" />
     <param name="calib_pose_csv"   value="$(find jaka_close_contro)/config/jaka1_world_robot_calibration_pose.csv" />
-    <param name="joint_speed_scale" value="0.15" />
-    <param name="goal_tolerance"    value="0.01" />
-    <param name="hold_time_after_reach" value="1.5" />
+    <param name="speed_scale" value="0.15" />
+    <param name="linear_speed_mm_s" value="80.0" />
+    <param name="linear_acc_mm_s2" value="200.0" />
+    <param name="hold_time_after_reach" value="1.0" />
   </node>
 </launch>

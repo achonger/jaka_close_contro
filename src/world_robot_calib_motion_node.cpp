@@ -1,45 +1,55 @@
 #include <ros/ros.h>
-#include <sensor_msgs/JointState.h>
 #include <ros/package.h>
-#include <jaka_sdk_driver/JointMove.h>
+#include <jaka_sdk_driver/LinearMove.h>
 
 #include <fstream>
 #include <sstream>
-#include <vector>
 #include <string>
-#include <algorithm>
+#include <vector>
 #include <cmath>
+
+struct CalibPoseRow
+{
+  std::string name;
+  double x_mm = 0.0;
+  double y_mm = 0.0;
+  double z_mm = 0.0;
+  double rx_deg = 0.0;
+  double ry_deg = 0.0;
+  double rz_deg = 0.0;
+};
 
 class WorldRobotCalibMotionNode
 {
 public:
-  WorldRobotCalibMotionNode(ros::NodeHandle &nh, ros::NodeHandle &pnh)
-      : nh_(nh)
+  WorldRobotCalibMotionNode(ros::NodeHandle &nh, ros::NodeHandle &pnh) : nh_(nh)
   {
     pnh.param<std::string>("arm_name", arm_name_, std::string("jaka1"));
     pnh.param<std::string>("calib_pose_csv", calib_pose_csv_,
                            ros::package::getPath("jaka_close_contro") + "/config/jaka1_world_robot_calibration_pose.csv");
-    pnh.param<std::string>("joint_move_service", joint_move_service_, std::string("/jaka_driver/joint_move"));
-    pnh.param<double>("joint_speed_scale", joint_speed_scale_, 0.15);
-    pnh.param<double>("goal_tolerance", goal_tolerance_, 0.01);
-    pnh.param<double>("hold_time_after_reach", hold_time_after_reach_, 1.5);
-    pnh.param<double>("max_wait_per_target", max_wait_per_target_, 30.0);
-    pnh.param<double>("check_rate", check_rate_hz_, 20.0);
+    pnh.param<std::string>("linear_move_service", linear_move_service_, std::string("/jaka_driver/linear_move"));
 
-    joint_state_sub_ = nh_.subscribe("/joint_states", 10, &WorldRobotCalibMotionNode::jointStateCb, this);
-    joint_move_client_ = nh_.serviceClient<jaka_sdk_driver::JointMove>(joint_move_service_);
+    pnh.param<double>("speed_scale", speed_scale_, 0.15);
+    // 兼容旧参数名 joint_speed_scale
+    pnh.param<double>("joint_speed_scale", speed_scale_, speed_scale_);
+    pnh.param<double>("linear_speed_mm_s", linear_speed_mm_s_, 80.0);
+    pnh.param<double>("linear_acc_mm_s2", linear_acc_mm_s2_, 200.0);
+    pnh.param<double>("hold_time_after_reach", hold_time_after_reach_, 1.0);
+
+    linear_move_client_ = nh_.serviceClient<jaka_sdk_driver::LinearMove>(linear_move_service_);
 
     if (!loadCalibPoses())
     {
-      ROS_ERROR("[CalibMotion] 无法加载标定轨迹 CSV，节点退出");
+      ROS_ERROR("[CalibMotion] 无法加载标定姿态 CSV，节点退出");
       ros::shutdown();
       return;
     }
 
-    ROS_INFO("[CalibMotion] 臂标识=%s, 标定轨迹姿态数: %zu", arm_name_.c_str(), poses_.size());
-    ROS_INFO("[CalibMotion] 速度缩放=%.2f, 收敛阈值=%.3f rad, 到位保持=%.2f s", joint_speed_scale_, goal_tolerance_, hold_time_after_reach_);
+    ROS_INFO("[CalibMotion] 臂标识=%s, 标定姿态数: %zu", arm_name_.c_str(), poses_.size());
+    ROS_INFO("[CalibMotion] 速度缩放=%.2f, 线速度=%.1f mm/s, 线加速度=%.1f mm/s^2, 到位保持=%.2f s", speed_scale_,
+             linear_speed_mm_s_, linear_acc_mm_s2_, hold_time_after_reach_);
     ROS_INFO("[CalibMotion] CSV 文件: %s", calib_pose_csv_.c_str());
-    ROS_INFO("[CalibMotion] joint_move 服务: %s", joint_move_service_.c_str());
+    ROS_INFO("[CalibMotion] linear_move 服务: %s", linear_move_service_.c_str());
 
     executeTrajectory();
   }
@@ -48,25 +58,14 @@ private:
   ros::NodeHandle nh_;
   std::string arm_name_;
   std::string calib_pose_csv_;
-  std::string joint_move_service_;
-  double joint_speed_scale_ = 0.15;
-  double goal_tolerance_ = 0.01;
-  double hold_time_after_reach_ = 1.5;
-  double max_wait_per_target_ = 30.0;
-  double check_rate_hz_ = 20.0;
+  std::string linear_move_service_;
+  double speed_scale_ = 0.15;
+  double linear_speed_mm_s_ = 80.0;
+  double linear_acc_mm_s2_ = 200.0;
+  double hold_time_after_reach_ = 1.0;
 
-  std::vector<std::vector<double>> poses_;
-  std::vector<double> current_joints_;
-  bool has_joint_state_ = false;
-
-  ros::Subscriber joint_state_sub_;
-  ros::ServiceClient joint_move_client_;
-
-  void jointStateCb(const sensor_msgs::JointState::ConstPtr &msg)
-  {
-    current_joints_ = msg->position;
-    has_joint_state_ = true;
-  }
+  std::vector<CalibPoseRow> poses_;
+  ros::ServiceClient linear_move_client_;
 
   bool loadCalibPoses()
   {
@@ -88,147 +87,98 @@ private:
       if (!header_skipped)
       {
         header_skipped = true;
+        continue; // 跳过表头
+      }
+
+      std::stringstream ss(line);
+      std::string item;
+      std::vector<std::string> cols;
+      while (std::getline(ss, item, ','))
+      {
+        cols.push_back(item);
+      }
+
+      if (cols.size() != 7)
+      {
+        ROS_WARN("[CalibMotion] CSV 行格式错误（期望7列），已跳过: %s", line.c_str());
         continue;
       }
 
-      std::vector<double> joints;
-      std::stringstream ss(line);
-      std::string item;
-      while (std::getline(ss, item, ','))
+      CalibPoseRow row;
+      row.name = cols[0];
+      try
       {
-        try
-        {
-          joints.push_back(std::stod(item));
-        }
-        catch (const std::exception &e)
-        {
-          ROS_WARN("[CalibMotion] CSV 解析失败，跳过该行: %s", line.c_str());
-          joints.clear();
-          break;
-        }
+        row.x_mm = std::stod(cols[1]);
+        row.y_mm = std::stod(cols[2]);
+        row.z_mm = std::stod(cols[3]);
+        row.rx_deg = std::stod(cols[4]);
+        row.ry_deg = std::stod(cols[5]);
+        row.rz_deg = std::stod(cols[6]);
+      }
+      catch (const std::exception &e)
+      {
+        ROS_WARN("[CalibMotion] CSV 数值解析失败，跳过该行: %s", line.c_str());
+        continue;
       }
 
-      if (joints.size() == 6)
-      {
-        poses_.push_back(joints);
-      }
-      else if (!joints.empty())
-      {
-        ROS_WARN("[CalibMotion] 该行不是 6 轴关节数据，已跳过: %s", line.c_str());
-      }
+      poses_.push_back(row);
     }
 
     return !poses_.empty();
   }
 
-  bool sendJointTarget(const std::vector<double> &target)
+  bool sendLinearTarget(const CalibPoseRow &target)
   {
-    if (!joint_move_client_.exists())
+    if (!linear_move_client_.exists())
     {
-      ROS_WARN("[CalibMotion] 等待 /jaka_driver/joint_move 服务...");
-      joint_move_client_.waitForExistence();
+      ROS_WARN("[CalibMotion] 等待 %s 服务...", linear_move_service_.c_str());
+      linear_move_client_.waitForExistence();
     }
 
-    jaka_sdk_driver::JointMove srv;
-    srv.request.pose = target;
-    srv.request.has_ref = false;
-    srv.request.ref_joint.clear();
-    srv.request.mvvelo = std::max(0.01, joint_speed_scale_); // SDK 速度单位取决于具体接口，这里直接按比例缩放
-    srv.request.mvacc = std::max(0.01, 0.5 * joint_speed_scale_);
+    const double DEG2RAD = M_PI / 180.0;
+    jaka_sdk_driver::LinearMove srv;
+    srv.request.pose = {target.x_mm, target.y_mm, target.z_mm,
+                        target.rx_deg * DEG2RAD, target.ry_deg * DEG2RAD, target.rz_deg * DEG2RAD};
+    srv.request.mvvelo = linear_speed_mm_s_ * speed_scale_;
+    srv.request.mvacc = linear_acc_mm_s2_ * speed_scale_;
     srv.request.mvtime = 0.0;
     srv.request.mvradii = 0.0;
-    srv.request.coord_mode = 0;
+    srv.request.coord_mode = 0; // 基座坐标系
     srv.request.index = 0;
 
-    if (!joint_move_client_.call(srv))
+    if (!linear_move_client_.call(srv))
     {
-      ROS_ERROR("[CalibMotion] joint_move 调用失败（通信错误）");
+      ROS_ERROR("[CalibMotion] linear_move 通信失败，姿态 %s 未发送", target.name.c_str());
       return false;
     }
     if (srv.response.ret != 0)
     {
-      ROS_ERROR("[CalibMotion] joint_move SDK 返回错误，ret=%d, message=%s", srv.response.ret, srv.response.message.c_str());
+      ROS_ERROR("[CalibMotion] linear_move 执行失败，ret=%d, message=%s", srv.response.ret, srv.response.message.c_str());
       return false;
     }
 
     return true;
   }
 
-  bool waitUntilReached(const std::vector<double> &target)
-  {
-    ros::Rate rate(check_rate_hz_);
-    const ros::Time start = ros::Time::now();
-    bool within_tolerance = false;
-    ros::Time hold_start;
-
-    while (ros::ok())
-    {
-      ros::spinOnce();
-      if (!has_joint_state_)
-      {
-        rate.sleep();
-        continue;
-      }
-
-      double max_diff = 0.0;
-      for (size_t i = 0; i < target.size() && i < current_joints_.size(); ++i)
-      {
-        max_diff = std::max(max_diff, std::fabs(target[i] - current_joints_[i]));
-      }
-
-      if (max_diff < goal_tolerance_)
-      {
-        if (!within_tolerance)
-        {
-          within_tolerance = true;
-          hold_start = ros::Time::now();
-          ROS_INFO("[CalibMotion] 已到位（误差 %.4f rad），保持 %.2f s 稳定...", max_diff, hold_time_after_reach_);
-        }
-        if ((ros::Time::now() - hold_start).toSec() >= hold_time_after_reach_)
-        {
-          return true;
-        }
-      }
-      else
-      {
-        within_tolerance = false;
-      }
-
-      if ((ros::Time::now() - start).toSec() > max_wait_per_target_)
-      {
-        ROS_ERROR("[CalibMotion] 等待到位超时（%.1f s），最大误差=%.4f rad", max_wait_per_target_, max_diff);
-        return false;
-      }
-
-      rate.sleep();
-    }
-
-    return false;
-  }
-
   void executeTrajectory()
   {
     for (size_t i = 0; i < poses_.size() && ros::ok(); ++i)
     {
-      ROS_INFO("[CalibMotion] 执行标定姿态 #%zu", i + 1);
-      const std::vector<double> &target = poses_[i];
+      const auto &p = poses_[i];
+      ROS_INFO("[CalibMotion] 执行标定位姿 #%zu (%s): pos(mm)=(%.1f, %.1f, %.1f), rpy(deg)=(%.1f, %.1f, %.1f)", i + 1,
+               p.name.c_str(), p.x_mm, p.y_mm, p.z_mm, p.rx_deg, p.ry_deg, p.rz_deg);
 
-      if (!sendJointTarget(target))
+      if (!sendLinearTarget(p))
       {
-        ROS_ERROR("[CalibMotion] 发送姿态 #%zu 失败，停止后续执行", i + 1);
+        ROS_ERROR("[CalibMotion] 姿态 %s 发送失败，停止后续执行", p.name.c_str());
         break;
       }
 
-      if (!waitUntilReached(target))
-      {
-        ROS_ERROR("[CalibMotion] 姿态 #%zu 未能稳定到位，停止后续执行", i + 1);
-        break;
-      }
-
-      ROS_INFO("[CalibMotion] 姿态 #%zu 完成，等待下一步", i + 1);
+      ros::Duration(hold_time_after_reach_).sleep();
+      ROS_INFO("[CalibMotion] 姿态 %s 完成，等待下一步", p.name.c_str());
     }
 
-    ROS_INFO("[CalibMotion] 标定轨迹执行完成");
+    ROS_INFO("[CalibMotion] 标定姿态序列执行完成");
   }
 };
 
@@ -242,4 +192,3 @@ int main(int argc, char **argv)
   ros::spin();
   return 0;
 }
-

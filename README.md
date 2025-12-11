@@ -34,15 +34,16 @@
 
 ## 快速上手：自动轨迹 + 自动采样标定
 
-无需手动移动机械臂，直接运行预定义标定轨迹并自动采样/求解：
+无需手动移动机械臂，直接运行预定义标定位姿（TCP 笛卡尔位姿）并自动采样/求解：
 
 1. 启动全自动标定管线：
    ```bash
    roslaunch jaka_close_contro world_robot_autocalib_motion.launch
    ```
    - 启动内容：驱动 + TF、ZED2i 相机、Aruco 检测/分流、世界板滤波、多面融合、世界-机器人标定节点、自动采样管理节点、自动标定轨迹执行节点。
-   - 轨迹使用 `config/jaka1_world_robot_calibration_pose.csv`，默认速度缩放 15%，到位阈值 0.01 rad、保持 1.5 s。
-2. 节点会按 CSV 依次发送关节目标并检测到位，运动过程中自动判断位姿变化并调用 `/collect_world_robot_sample`。
+   - 轨迹文件使用 `config/jaka1_world_robot_calibration_pose.csv`，字段为 `name,x_mm,y_mm,z_mm,rx_deg,ry_deg,rz_deg`，单位分别为 mm / deg（基座坐标系下的 TCP 位姿）。
+   - `world_robot_calib_motion_node` 通过 `/jaka_driver/linear_move` 调用官方驱动的笛卡尔直线运动接口，默认速度倍率 15%，线速度 80 mm/s、线加速度 200 mm/s²， 每个姿态保持 1 s 方便采样。
+2. 节点会按 CSV 顺序依次发送目标 TCP 位姿，运动过程中自动判断位姿变化并调用 `/collect_world_robot_sample`。
 3. 样本数量达到 `min_samples`（默认 16）后，管理节点自动调用 `/solve_world_robot_calibration`，在终端打印残差统计并写入 `config/world_robot_extrinsic.yaml`。
 4. 标定完成后即可直接切换到闭环观察/控制（`world_robot_closedloop.launch`），无需再次求解外参。
 
