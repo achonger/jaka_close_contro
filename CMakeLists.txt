@@ -143,6 +143,13 @@ target_link_libraries(world_robot_calib_motion_node
 )
 add_dependencies(world_robot_calib_motion_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
+# 9. 关节状态适配（jaka_driver -> /joint_states）
+add_executable(jaka_state_adapter_node src/jaka_state_adapter_node.cpp)
+target_link_libraries(jaka_state_adapter_node
+  ${catkin_LIBRARIES}
+)
+add_dependencies(jaka_state_adapter_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
 # 安装配置文件
 install(DIRECTORY launch config
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}

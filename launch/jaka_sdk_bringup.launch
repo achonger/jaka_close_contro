@@ -9,17 +9,19 @@
   <!-- 发布官方 URDF 描述，供 robot_state_publisher 生成 TF -->
   <param name="robot_description" textfile="$(arg urdf_file)" />
 
-  <!-- 启动基于 JAKA SDK 的驱动节点 -->
-  <node pkg="jaka_sdk_driver"
-        type="jaka_sdk_driver_node"
-        name="jaka_sdk_driver_node"
+  <!-- 启动官方 JAKA ROS driver，提供 /jaka_driver/linear_move 等接口 -->
+  <node pkg="jaka_driver"
+        type="jaka_driver"
+        name="jaka_driver"
         output="screen">
-
-    <!-- 传给 C++ 节点的私有参数 robot_ip -->
-    <param name="robot_ip"  value="$(arg ip)"/>
-    <!-- joint_states 发布频率 -->
-    <param name="status_hz" value="50.0"/>
+    <param name="robot_ip" value="$(arg ip)"/>
   </node>
+
+  <!-- 状态适配：将 /jaka_driver/joint_position 转发为 /joint_states 供 robot_state_publisher 使用 -->
+  <node pkg="jaka_close_contro"
+        type="jaka_state_adapter_node"
+        name="jaka_state_adapter"
+        output="screen" />
 
   <!-- 使用官方 URDF + /joint_states 发布机械臂 TF -->
   <node pkg="robot_state_publisher"
