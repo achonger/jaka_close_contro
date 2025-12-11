@@ -1,6 +1,6 @@
 #include <ros/ros.h>
 #include <ros/package.h>
-#include <jaka_sdk_driver/LinearMove.h>
+#include <jaka_msgs/Move.h>
 
 #include <fstream>
 #include <sstream>
@@ -36,7 +36,7 @@ public:
     pnh.param<double>("linear_acc_mm_s2", linear_acc_mm_s2_, 200.0);
     pnh.param<double>("hold_time_after_reach", hold_time_after_reach_, 1.0);
 
-    linear_move_client_ = nh_.serviceClient<jaka_sdk_driver::LinearMove>(linear_move_service_);
+    linear_move_client_ = nh_.serviceClient<jaka_msgs::Move>(linear_move_service_);
 
     if (!loadCalibPoses())
     {
@@ -136,7 +136,7 @@ private:
     }
 
     const double DEG2RAD = M_PI / 180.0;
-    jaka_sdk_driver::LinearMove srv;
+    jaka_msgs::Move srv;
     srv.request.pose = {target.x_mm, target.y_mm, target.z_mm,
                         target.rx_deg * DEG2RAD, target.ry_deg * DEG2RAD, target.rz_deg * DEG2RAD};
     srv.request.mvvelo = linear_speed_mm_s_ * speed_scale_;

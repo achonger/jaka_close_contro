@@ -16,6 +16,7 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   fiducial_msgs
   zed_wrapper
+  jaka_msgs
   jaka_sdk_driver
   std_srvs
   message_generation
@@ -48,6 +49,7 @@ catkin_package(
     cv_bridge
     fiducial_msgs
     zed_wrapper
+    jaka_msgs
     jaka_sdk_driver
     std_srvs
     message_runtime
