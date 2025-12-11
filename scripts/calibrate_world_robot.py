@@ -7,31 +7,19 @@
 import rospy
 import sys
 import time
-from std_srvs.srv import Trigger, TriggerRequest
-from geometry_msgs.msg import PoseStamped
-from sensor_msgs.msg import JointState
+from jaka_close_contro.srv import WorldRobotCalibration, WorldRobotCollectSample, WorldRobotCollectSampleRequest
 from jaka_sdk_driver.srv import JointMove, JointMoveRequest
-import math
 
 class WorldRobotCalibrationClient:
     def __init__(self):
         rospy.init_node('world_robot_calibration_client', anonymous=True)
         
         # 服务代理
-        self.collect_data_srv = rospy.ServiceProxy('/collect_world_robot_calibration_data', Trigger)
-        self.calibrate_srv = rospy.ServiceProxy('/calibrate_world_robot', Trigger)
+        self.collect_data_srv = rospy.ServiceProxy('/collect_world_robot_sample', WorldRobotCollectSample)
+        self.calibrate_srv = rospy.ServiceProxy('/solve_world_robot_calibration', WorldRobotCalibration)
         self.joint_move_srv = rospy.ServiceProxy('/jaka_driver/joint_move', JointMove)
-        
-        # 订阅标定结果
-        self.calibration_result_sub = rospy.Subscriber('/world_robot_calibration_result', PoseStamped, self.calibration_result_callback)
-        
-        self.calibration_result = None
+
         print("World-Robot Calibration Client initialized")
-    
-    def calibration_result_callback(self, msg):
-        self.calibration_result = msg
-        print(f"Received calibration result: pos=({msg.pose.position.x:.3f}, {msg.pose.position.y:.3f}, {msg.pose.position.z:.3f}), "
-              f"quat=({msg.pose.orientation.w:.3f}, {msg.pose.orientation.x:.3f}, {msg.pose.orientation.y:.3f}, {msg.pose.orientation.z:.3f})")
     
     def move_to_pose(self, joint_positions, velocity=0.5, acceleration=0.5):
         """移动机械臂到指定关节角度"""
@@ -84,9 +72,13 @@ class WorldRobotCalibrationClient:
             
             # 收集数据点
             try:
-                response = self.collect_data_srv(TriggerRequest())
+                response = self.collect_data_srv(WorldRobotCollectSampleRequest())
                 if response.success:
                     print(f"Successfully collected data point {i+1}")
+                    print(f"  world_cube pos: ({response.world_cube_pos_x:.3f}, {response.world_cube_pos_y:.3f}, {response.world_cube_pos_z:.3f})")
+                    print(f"  world_cube quat: ({response.world_cube_quat_x:.4f}, {response.world_cube_quat_y:.4f}, {response.world_cube_quat_z:.4f}, {response.world_cube_quat_w:.4f})")
+                    print(f"  base_cube  pos: ({response.base_cube_pos_x:.3f}, {response.base_cube_pos_y:.3f}, {response.base_cube_pos_z:.3f})")
+                    print(f"  base_cube  quat: ({response.base_cube_quat_x:.4f}, {response.base_cube_quat_y:.4f}, {response.base_cube_quat_z:.4f}, {response.base_cube_quat_w:.4f})")
                 else:
                     print(f"Failed to collect data point {i+1}: {response.message}")
             except rospy.ServiceException as e:
@@ -102,9 +94,11 @@ class WorldRobotCalibrationClient:
         print("Starting world-robot calibration...")
         
         try:
-            response = self.calibrate_srv(TriggerRequest())
+            response = self.calibrate_srv()
             if response.success:
                 print("Calibration completed successfully")
+                print(f"world -> base translation: ({response.translation.x:.4f}, {response.translation.y:.4f}, {response.translation.z:.4f})")
+                print(f"world -> base rotation (xyzw): ({response.rotation.x:.4f}, {response.rotation.y:.4f}, {response.rotation.z:.4f}, {response.rotation.w:.4f})")
                 return True
             else:
                 print(f"Calibration failed: {response.message}")

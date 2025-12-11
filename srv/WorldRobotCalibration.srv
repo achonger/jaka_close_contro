@@ -1,0 +1,31 @@
+# 请求为空，调用时使用 rosservice call /solve_world_robot_calibration "{}"
+---
+bool success
+string message
+geometry_msgs/Vector3 translation
+geometry_msgs/Quaternion rotation
+
+# 平移残差（世界下 cube_pred vs cube_meas），单位 m
+float64 position_rmse_m
+float64 position_mean_m
+float64 position_std_m
+float64 position_max_m
+
+# 姿态残差（世界下 cube_pred vs cube_meas），单位 deg
+float64 orientation_rmse_deg
+float64 orientation_mean_deg
+float64 orientation_std_deg
+float64 orientation_max_deg
+
+# 外参离散度：每帧候选 T_WB_i 相对最终 T_WB 的偏差
+# 平移离散度，单位 m
+float64 extrinsic_pos_rmse_m
+float64 extrinsic_pos_mean_m
+float64 extrinsic_pos_std_m
+float64 extrinsic_pos_max_m
+
+# 姿态离散度，单位 deg
+float64 extrinsic_rot_rmse_deg
+float64 extrinsic_rot_mean_deg
+float64 extrinsic_rot_std_deg
+float64 extrinsic_rot_max_deg

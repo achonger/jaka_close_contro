@@ -1,31 +1,19 @@
 <launch>
-  <!--
-    一键世界-机器人标定（无需旧版手眼标定）：
-    - 世界系由 id=0、边长 80mm 的平面 ArUco 定义（world -> camera TF 持续由 world_tag_node 发布）
-    - 机械臂末端法兰 +Z 方向 77mm 处固定一枚五面正方体标签，用于视觉观测末端位姿
-    - 通过多尺寸 ArUco 检测 + 世界板滤波 + 多面融合，建立 world 与末端之间的闭环观测
-    - 步骤：
-        1) roslaunch jaka_close_contro world_robot_calibration.launch
-        2) 手动移动机器人，使末端正方体在多个姿态下保持在相机视野
-        3) 多次调用 /collect_world_robot_sample 采集样本
-        4) 调用 /solve_world_robot_calibration 求解 world -> robot_base，并按日志提示固化静态 TF
-  -->
-
+  <!-- 0. JAKA 驱动与 URDF TF -->
   <arg name="ip" default="192.168.1.100" />
   <arg name="urdf_file" default="$(find jaka_close_contro)/urdf/jaka_zu3.urdf" />
 
-  <!-- 0. 启动 JAKA 驱动 + robot_state_publisher，提供关节与 TF 树 -->
   <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
     <arg name="ip" value="$(arg ip)" />
     <arg name="urdf_file" value="$(arg urdf_file)" />
   </include>
 
-  <!-- 1. 启动 ZED2i 相机 -->
+  <!-- 1. ZED2i 相机 -->
   <include file="$(find zed_wrapper)/launch/zed2i.launch">
     <arg name="svo_file" value="" />
   </include>
 
-  <!-- 2. 多尺寸 ArUco 检测器：输出 /fiducial_transforms -->
+  <!-- 2. ArUco 检测 + 分流 + 世界板 + 多面融合，与标定流程一致 -->
   <node pkg="jaka_close_contro"
         type="cube_aruco_detector_node"
         name="cube_aruco_detector"
@@ -43,7 +31,6 @@
     </rosparam>
   </node>
 
-  <!-- 3. 话题分流：分离世界标记与工具端标记 -->
   <node pkg="jaka_close_contro"
         type="fiducial_relay_node"
         name="fiducial_relay"
@@ -55,7 +42,6 @@
     <param name="tool_topic"  value="/tool_fiducials"/>
   </node>
 
-  <!-- 4. 世界坐标系定义：平滑 world -> camera TF -->
   <node pkg="jaka_close_contro"
         type="world_tag_node"
         name="world_tag_node"
@@ -68,7 +54,6 @@
     <param name="alpha_rot"         value="0.3"/>
   </node>
 
-  <!-- 5. 末端正方体多面融合，输出 /cube_center_fused -->
   <node pkg="jaka_close_contro"
         type="cube_multi_face_fusion_node"
         name="cube_multi_face_fusion"
@@ -85,7 +70,7 @@
     <param name="publish_tool_tf"        value="false"/>
   </node>
 
-  <!-- 6. 世界-机器人标定节点（直接估计 world -> robot_base） -->
+  <!-- 3. 世界-机器人标定节点（提供采样/求解服务） -->
   <node pkg="jaka_close_contro"
         type="world_robot_calibration_node"
         name="world_robot_calibration_node"
@@ -96,7 +81,38 @@
     <param name="camera_frame"      value="zed2i_left_camera_optical_frame" />
     <param name="cube_frame"        value="cube_center" />
     <param name="cube_offset_z_m"   value="0.077" />
-    <param name="min_samples"       value="10" />
+    <param name="min_samples"       value="16" />
     <param name="publish_tf"        value="false" />
+  </node>
+
+  <!-- 4. 自动采样/求解管理节点 -->
+  <node pkg="jaka_close_contro"
+        type="world_robot_autocalib_manager_node"
+        name="world_robot_autocalib_manager"
+        output="screen">
+    <param name="min_translation" value="0.05" />
+    <param name="min_angle_deg"   value="15.0" />
+    <param name="min_samples"     value="16" />
+    <param name="auto_solve"      value="true" />
+    <param name="extrinsic_yaml"  value="$(find jaka_close_contro)/config/world_robot_extrinsic.yaml" />
+    <param name="cube_topic"      value="/cube_center_fused" />
+    <param name="world_frame"     value="world" />
+    <param name="camera_frame"    value="zed2i_left_camera_optical_frame" />
+    <param name="cube_frame"      value="cube_center" />
+    <param name="robot_base_frame" value="Link_0" />
+  </node>
+
+  <!-- 5. 标定轨迹自动执行（速度限制 15%） -->
+  <node pkg="jaka_close_contro"
+        type="world_robot_calib_motion_node"
+        name="world_robot_calib_motion"
+        output="screen">
+    <param name="arm_name"         value="jaka1" />
+    <param name="calib_pose_csv"   value="$(find jaka_close_contro)/config/jaka1_world_robot_calibration_pose.csv" />
+    <param name="speed_scale" value="0.15" />
+    <param name="linear_speed_mm_s" value="80.0" />
+    <param name="linear_acc_mm_s2" value="200.0" />
+    <param name="pre_sample_wait_sec" value="5.0" />
+    <param name="post_sample_wait_sec" value="2.0" />
   </node>
 </launch>
