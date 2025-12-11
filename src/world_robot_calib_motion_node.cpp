@@ -51,6 +51,7 @@ public:
     ROS_INFO("[CalibMotion] CSV 文件: %s", calib_pose_csv_.c_str());
     ROS_INFO("[CalibMotion] linear_move 服务: %s", linear_move_service_.c_str());
 
+    waitForService();
     executeTrajectory();
   }
 
@@ -64,8 +65,23 @@ private:
   double linear_acc_mm_s2_ = 200.0;
   double hold_time_after_reach_ = 1.0;
 
+  std::size_t target_index_ = 0;
+
   std::vector<CalibPoseRow> poses_;
   ros::ServiceClient linear_move_client_;
+
+  void waitForService()
+  {
+    while (ros::ok())
+    {
+      if (ros::service::waitForService(linear_move_service_, ros::Duration(1.0)))
+      {
+        ROS_INFO("[CalibMotion] linear_move 服务就绪: %s", linear_move_service_.c_str());
+        return;
+      }
+      ROS_WARN("[CalibMotion] 等待 %s ...", linear_move_service_.c_str());
+    }
+  }
 
   bool loadCalibPoses()
   {
@@ -129,12 +145,6 @@ private:
 
   bool sendLinearTarget(const CalibPoseRow &target)
   {
-    if (!linear_move_client_.exists())
-    {
-      ROS_WARN("[CalibMotion] 等待 %s 服务...", linear_move_service_.c_str());
-      linear_move_client_.waitForExistence();
-    }
-
     const double DEG2RAD = M_PI / 180.0;
     jaka_msgs::Move srv;
     srv.request.pose = {target.x_mm, target.y_mm, target.z_mm,
@@ -144,7 +154,7 @@ private:
     srv.request.mvtime = 0.0;
     srv.request.mvradii = 0.0;
     srv.request.coord_mode = 0; // 基座坐标系
-    srv.request.index = 0;
+    srv.request.index = static_cast<int32_t>(target_index_);
 
     if (!linear_move_client_.call(srv))
     {
@@ -157,14 +167,21 @@ private:
       return false;
     }
 
+    ROS_INFO("[CalibMotion] linear_move ret=%d, message=%s", srv.response.ret, srv.response.message.c_str());
+
     return true;
   }
 
   void executeTrajectory()
   {
+    const double effective_speed = linear_speed_mm_s_ * speed_scale_;
+    const double effective_acc = linear_acc_mm_s2_ * speed_scale_;
+    ROS_INFO("[CalibMotion] 实际发送速度=%.1f mm/s, 加速度=%.1f mm/s^2", effective_speed, effective_acc);
+
     for (size_t i = 0; i < poses_.size() && ros::ok(); ++i)
     {
       const auto &p = poses_[i];
+      target_index_ = i;
       ROS_INFO("[CalibMotion] 执行标定位姿 #%zu (%s): pos(mm)=(%.1f, %.1f, %.1f), rpy(deg)=(%.1f, %.1f, %.1f)", i + 1,
                p.name.c_str(), p.x_mm, p.y_mm, p.z_mm, p.rx_deg, p.ry_deg, p.rz_deg);
 
