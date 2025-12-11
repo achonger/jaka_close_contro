@@ -72,6 +72,30 @@ private:
   tf2_ros::TransformBroadcaster tf_broadcaster_;
   ros::Timer tf_timer_;
 
+  struct ResidualStats
+  {
+    size_t sample_count = 0;
+    double position_mean_m = 0.0;
+    double position_std_m = 0.0;
+    double position_rmse_m = 0.0;
+    double position_max_m = 0.0;
+
+    double orientation_mean_deg = 0.0;
+    double orientation_std_deg = 0.0;
+    double orientation_rmse_deg = 0.0;
+    double orientation_max_deg = 0.0;
+
+    double extrinsic_pos_mean_m = 0.0;
+    double extrinsic_pos_std_m = 0.0;
+    double extrinsic_pos_rmse_m = 0.0;
+    double extrinsic_pos_max_m = 0.0;
+
+    double extrinsic_rot_mean_deg = 0.0;
+    double extrinsic_rot_std_deg = 0.0;
+    double extrinsic_rot_rmse_deg = 0.0;
+    double extrinsic_rot_max_deg = 0.0;
+  };
+
   geometry_msgs::PoseStamped latest_cube_pose_;
   bool has_cube_pose_ = false;
 
@@ -265,7 +289,27 @@ private:
     T_WB_est.setRotation(q_tf);
     T_WB_est.setOrigin(tf2::Vector3(t_wb.x(), t_wb.y(), t_wb.z()));
 
-    computeAndPrintResidualStats(T_WB_est);
+    const ResidualStats stats = computeResidualStats(T_WB_est);
+
+    res.position_rmse_m = stats.position_rmse_m;
+    res.position_mean_m = stats.position_mean_m;
+    res.position_std_m = stats.position_std_m;
+    res.position_max_m = stats.position_max_m;
+
+    res.orientation_rmse_deg = stats.orientation_rmse_deg;
+    res.orientation_mean_deg = stats.orientation_mean_deg;
+    res.orientation_std_deg = stats.orientation_std_deg;
+    res.orientation_max_deg = stats.orientation_max_deg;
+
+    res.extrinsic_pos_rmse_m = stats.extrinsic_pos_rmse_m;
+    res.extrinsic_pos_mean_m = stats.extrinsic_pos_mean_m;
+    res.extrinsic_pos_std_m = stats.extrinsic_pos_std_m;
+    res.extrinsic_pos_max_m = stats.extrinsic_pos_max_m;
+
+    res.extrinsic_rot_rmse_deg = stats.extrinsic_rot_rmse_deg;
+    res.extrinsic_rot_mean_deg = stats.extrinsic_rot_mean_deg;
+    res.extrinsic_rot_std_deg = stats.extrinsic_rot_std_deg;
+    res.extrinsic_rot_max_deg = stats.extrinsic_rot_max_deg;
 
     return true;
   }
@@ -390,18 +434,20 @@ private:
     }
   }
 
-  void computeAndPrintResidualStats(const tf2::Transform &T_WB_est)
+  ResidualStats computeResidualStats(const tf2::Transform &T_WB_est)
   {
+    ResidualStats stats;
     const size_t N = base_cube_positions_.size();
+    stats.sample_count = N;
+
     if (N == 0)
     {
       ROS_WARN("[WorldRobot] 无样本可计算残差统计");
-      return;
+      return stats;
     }
     if (N < 2)
     {
       ROS_WARN("[WorldRobot] 样本不足，无法计算有效统计量 (N=%zu)", N);
-      return;
     }
 
     std::vector<double> pos_errs;
@@ -436,8 +482,7 @@ private:
       q_err.normalize();
       double e_R = q_err.getAngle() * 180.0 / M_PI;
 
-      tf2::Transform T_B_cube_pred_inv = T_B_cube_pred.inverse();
-      tf2::Transform T_WB_i = T_W_cube_meas * T_B_cube_pred_inv;
+      tf2::Transform T_WB_i = T_W_cube_meas * T_B_cube_pred.inverse();
       tf2::Transform T_disp = T_WB_est.inverse() * T_WB_i;
       tf2::Vector3 t_disp = T_disp.getOrigin();
       double e_t_disp = t_disp.length();
@@ -492,33 +537,33 @@ private:
       }
     };
 
-    double mean_pos, std_pos, rmse_pos, max_pos;
-    double mean_rot_deg, std_rot_deg, rmse_rot_deg, max_rot_deg;
-    double mean_disp_pos, std_disp_pos, rmse_disp_pos, max_disp_pos;
-    double mean_disp_rot_deg, std_disp_rot_deg, rmse_disp_rot_deg, max_disp_rot_deg;
+    computeStats(pos_errs, stats.position_mean_m, stats.position_std_m, stats.position_rmse_m, stats.position_max_m);
+    computeStats(rot_errs_deg, stats.orientation_mean_deg, stats.orientation_std_deg, stats.orientation_rmse_deg, stats.orientation_max_deg);
+    computeStats(extrinsic_disp_pos, stats.extrinsic_pos_mean_m, stats.extrinsic_pos_std_m, stats.extrinsic_pos_rmse_m, stats.extrinsic_pos_max_m);
+    computeStats(extrinsic_disp_rot_deg, stats.extrinsic_rot_mean_deg, stats.extrinsic_rot_std_deg, stats.extrinsic_rot_rmse_deg, stats.extrinsic_rot_max_deg);
 
-    computeStats(pos_errs, mean_pos, std_pos, rmse_pos, max_pos);
-    computeStats(rot_errs_deg, mean_rot_deg, std_rot_deg, rmse_rot_deg, max_rot_deg);
-    computeStats(extrinsic_disp_pos, mean_disp_pos, std_disp_pos, rmse_disp_pos, max_disp_pos);
-    computeStats(extrinsic_disp_rot_deg, mean_disp_rot_deg, std_disp_rot_deg, rmse_disp_rot_deg, max_disp_rot_deg);
+    if (N >= 1)
+    {
+      ROS_INFO_STREAM("=== World-Robot Calibration Residuals (N=" << N << ") ===");
+      ROS_INFO_STREAM("Position residual | RMSE = " << stats.position_rmse_m << " m"
+                                                   << ", mean = " << stats.position_mean_m << " m"
+                                                   << ", std = " << stats.position_std_m << " m"
+                                                   << ", max = " << stats.position_max_m << " m");
+      ROS_INFO_STREAM("Orientation residual | RMSE = " << stats.orientation_rmse_deg << " deg"
+                                                       << ", mean = " << stats.orientation_mean_deg << " deg"
+                                                       << ", std = " << stats.orientation_std_deg << " deg"
+                                                       << ", max = " << stats.orientation_max_deg << " deg");
+      ROS_INFO_STREAM("Extrinsic dispersion (world->base) - translation | RMSE = " << stats.extrinsic_pos_rmse_m << " m"
+                                                                                   << ", mean = " << stats.extrinsic_pos_mean_m << " m"
+                                                                                   << ", std = " << stats.extrinsic_pos_std_m << " m"
+                                                                                   << ", max = " << stats.extrinsic_pos_max_m << " m");
+      ROS_INFO_STREAM("Extrinsic dispersion (world->base) - orientation | RMSE = " << stats.extrinsic_rot_rmse_deg << " deg"
+                                                                                   << ", mean = " << stats.extrinsic_rot_mean_deg << " deg"
+                                                                                   << ", std = " << stats.extrinsic_rot_std_deg << " deg"
+                                                                                   << ", max = " << stats.extrinsic_rot_max_deg << " deg");
+    }
 
-    ROS_INFO_STREAM("=== World-Robot Calibration Residuals (N=" << N << ") ===");
-    ROS_INFO_STREAM("Position residual | RMSE = " << rmse_pos << " m"
-                                                 << ", mean = " << mean_pos << " m"
-                                                 << ", std = " << std_pos << " m"
-                                                 << ", max = " << max_pos << " m");
-    ROS_INFO_STREAM("Orientation residual | RMSE = " << rmse_rot_deg << " deg"
-                                                     << ", mean = " << mean_rot_deg << " deg"
-                                                     << ", std = " << std_rot_deg << " deg"
-                                                     << ", max = " << max_rot_deg << " deg");
-    ROS_INFO_STREAM("Extrinsic dispersion (world->base) - translation | RMSE = " << rmse_disp_pos << " m"
-                                                                                 << ", mean = " << mean_disp_pos << " m"
-                                                                                 << ", std = " << std_disp_pos << " m"
-                                                                                 << ", max = " << max_disp_pos << " m");
-    ROS_INFO_STREAM("Extrinsic dispersion (world->base) - orientation | RMSE = " << rmse_disp_rot_deg << " deg"
-                                                                                 << ", mean = " << mean_disp_rot_deg << " deg"
-                                                                                 << ", std = " << std_disp_rot_deg << " deg"
-                                                                                 << ", max = " << max_disp_rot_deg << " deg");
+    return stats;
   }
 
   void loadExistingCalibration()
