@@ -127,6 +127,20 @@ target_link_libraries(world_robot_calibration_node
 )
 add_dependencies(world_robot_calibration_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
+# 8. 自动标定管理与运动执行
+add_executable(world_robot_autocalib_manager_node src/world_robot_autocalib_manager_node.cpp)
+target_link_libraries(world_robot_autocalib_manager_node
+  ${catkin_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
+)
+add_dependencies(world_robot_autocalib_manager_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+add_executable(world_robot_calib_motion_node src/world_robot_calib_motion_node.cpp)
+target_link_libraries(world_robot_calib_motion_node
+  ${catkin_LIBRARIES}
+)
+add_dependencies(world_robot_calib_motion_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
 # 安装配置文件
 install(DIRECTORY launch config
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}

@@ -32,6 +32,20 @@
    - 日志会打印 static_transform_publisher 命令示例，可在其他 launch 中固化 TF。
    - 若 `~publish_tf` 为 true，节点会自动周期性发布 `world -> robot_base`。
 
+## 快速上手：自动轨迹 + 自动采样标定
+
+无需手动移动机械臂，直接运行预定义标定轨迹并自动采样/求解：
+
+1. 启动全自动标定管线：
+   ```bash
+   roslaunch jaka_close_contro world_robot_autocalib_motion.launch
+   ```
+   - 启动内容：驱动 + TF、ZED2i 相机、Aruco 检测/分流、世界板滤波、多面融合、世界-机器人标定节点、自动采样管理节点、自动标定轨迹执行节点。
+   - 轨迹使用 `config/jaka1_world_robot_calibration_pose.csv`，默认速度缩放 15%，到位阈值 0.01 rad、保持 1.5 s。
+2. 节点会按 CSV 依次发送关节目标并检测到位，运动过程中自动判断位姿变化并调用 `/collect_world_robot_sample`。
+3. 样本数量达到 `min_samples`（默认 16）后，管理节点自动调用 `/solve_world_robot_calibration`，在终端打印残差统计并写入 `config/world_robot_extrinsic.yaml`。
+4. 标定完成后即可直接切换到闭环观察/控制（`world_robot_closedloop.launch`），无需再次求解外参。
+
 ## 快速上手：一键闭环观察/控制
 
 闭环阶段直接使用标定生成的 `config/world_robot_extrinsic.yaml`，无需再次求解外参。推荐流程：
@@ -93,6 +107,8 @@
 ├── launch/
 │   ├── world_robot_calibration.launch   # 一键世界-机器人标定
 │   ├── world_robot_closedloop.launch    # 一键闭环观察/控制
+│   ├── world_robot_autocalib_motion.launch # 自动轨迹 + 自动采样标定
+│   ├── world_robot_selfcheck.launch     # 仅自检视觉/外参 TF 链
 │   ├── hand_eye_calibration.launch      # 兼容入口，内部直接 include 新标定
 │   ├── closed_loop_system.launch        # 示例系统启动，已移除旧手眼节点
 │   └── jaka_sdk_bringup.launch
@@ -102,6 +118,8 @@
 │   ├── world_tag_node.cpp
 │   ├── cube_multi_face_fusion_node.cpp
 │   ├── world_robot_calibration_node.cpp
+│   ├── world_robot_autocalib_manager_node.cpp
+│   ├── world_robot_calib_motion_node.cpp
 │   ├── world_robot_extrinsic_broadcaster_node.cpp
 │   ├── cube_world_closedloop_node.cpp
 │   └── closed_loop_control_node.cpp
@@ -109,7 +127,8 @@
 │   └── WorldRobotCalibration.srv
 ├── config/
 │   ├── cube_faces_current.yaml
-│   └── cube_faces_ideal.yaml
+│   ├── cube_faces_ideal.yaml
+│   └── jaka1_world_robot_calibration_pose.csv   # arm1 标定轨迹（可扩展 arm2/arm3/arm4）
 └── urdf/
     └── jaka_zu3.urdf
 ```
