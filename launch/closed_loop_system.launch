@@ -23,9 +23,7 @@
     <node name="cube_multi_face_fusion" pkg="jaka_vision_control" type="cube_multi_face_fusion_node" output="screen">
     </node>
 
-    <!-- 启动标定节点 -->
-    <node name="calibration_node" pkg="jaka_vision_control" type="calibration_node" output="screen">
-    </node>
+    <!-- 旧版手眼标定节点已移除，闭环依赖 world->base 标定结果 -->
 
     <!-- 启动闭环控制节点 -->
     <node name="closed_loop_control" pkg="jaka_vision_control" type="closed_loop_control_node" output="screen">

@@ -1,412 +1,611 @@
 #include <ros/ros.h>
 #include <geometry_msgs/PoseStamped.h>
-#include <sensor_msgs/JointState.h>
-#include <tf2_ros/transform_listener.h>
+#include <geometry_msgs/TransformStamped.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
-#include <std_srvs/Trigger.h>
-#include <jaka_sdk_driver/JointMove.h>
-#include <vector>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/transform_listener.h>
 #include <fstream>
-#include <yaml-cpp/yaml.h>
+#include <vector>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
-#include <Eigen/SVD>
-#include <Eigen/Eigenvalues>
+#include <cmath>
+#include <yaml-cpp/yaml.h>
+#include <ros/package.h>
+
+#include <jaka_close_contro/WorldRobotCalibration.h>
+#include <jaka_close_contro/WorldRobotCollectSample.h>
 
 class WorldRobotCalibrationNode
 {
 public:
-    WorldRobotCalibrationNode(ros::NodeHandle& nh) : tf_listener_(tf_buffer_)
+  WorldRobotCalibrationNode(ros::NodeHandle &nh, ros::NodeHandle &pnh)
+      : tf_listener_(tf_buffer_)
+  {
+    pnh.param<std::string>("world_frame", world_frame_, std::string("world"));
+    pnh.param<std::string>("robot_base_frame", robot_base_frame_, std::string("Link_0"));
+    pnh.param<std::string>("tool_frame", tool_frame_, std::string("Link_6"));
+    pnh.param<std::string>("camera_frame", camera_frame_, std::string("zed2i_left_camera_optical_frame"));
+    pnh.param<std::string>("cube_frame", cube_frame_, std::string("cube_center"));
+    pnh.param<std::string>("cube_topic", cube_topic_, std::string("/cube_center_fused"));
+    pnh.param<int>("min_samples", min_samples_, 10);
+    pnh.param<bool>("publish_tf", publish_tf_, false);
+
+    std::vector<double> offset_xyz;
+    if (pnh.getParam("cube_offset_xyz_m", offset_xyz) && offset_xyz.size() == 3)
     {
-        // 订阅立方体中心位姿（从相机坐标系）
-        cube_pose_sub_ = nh.subscribe("/cube_center_fused", 1, &WorldRobotCalibrationNode::cubePoseCallback, this);
-        
-        // 订阅关节状态
-        joint_state_sub_ = nh.subscribe("/joint_states", 1, &WorldRobotCalibrationNode::jointStateCallback, this);
-        
-        // 服务客户端 - 用于发送关节运动命令
-        joint_move_client_ = nh.serviceClient<jaka_sdk_driver::JointMove>("/jaka_driver/joint_move");
-        
-        // 服务服务器 - 用于触发标定
-        calibrate_service_ = nh.advertiseService("/calibrate_world_robot", &WorldRobotCalibrationNode::calibrateWorldRobot, this);
-        collect_data_service_ = nh.advertiseService("/collect_world_robot_calibration_data", &WorldRobotCalibrationNode::collectCalibrationData, this);
-        
-        // 发布标定结果
-        calibration_result_pub_ = nh.advertise<geometry_msgs::PoseStamped>("/world_robot_calibration_result", 1);
-        
-        // 读取参数
-        nh.param<std::string>("world_frame", world_frame_, "world");
-        nh.param<std::string>("robot_base_frame", robot_base_frame_, "jaka_base_link");
-        nh.param<std::string>("tool_frame", tool_frame_, "jaka_tool");
-        nh.param<std::string>("camera_frame", camera_frame_, "zed2i_left_camera_optical_frame");
-        nh.param<std::string>("cube_frame", cube_frame_, "cube_center");
-        
-        ROS_INFO("World-Robot Calibration Node initialized");
-        ROS_INFO("World frame: %s", world_frame_.c_str());
-        ROS_INFO("Robot base frame: %s", robot_base_frame_.c_str());
-        ROS_INFO("Tool frame: %s", tool_frame_.c_str());
-        ROS_INFO("Camera frame: %s", camera_frame_.c_str());
-        ROS_INFO("Cube frame: %s", cube_frame_.c_str());
+      cube_offset_ = Eigen::Vector3d(offset_xyz[0], offset_xyz[1], offset_xyz[2]);
     }
+    else
+    {
+      double offset_z = 0.077;
+      pnh.param<double>("cube_offset_z_m", offset_z, 0.077);
+      cube_offset_ = Eigen::Vector3d(0.0, 0.0, offset_z);
+    }
+
+    const std::string default_output = ros::package::getPath("jaka_close_contro") + "/config/world_robot_extrinsic.yaml";
+    pnh.param<std::string>("output_yaml", output_yaml_path_, default_output);
+
+    cube_sub_ = nh.subscribe(cube_topic_, 1, &WorldRobotCalibrationNode::cubeCallback, this);
+    collect_srv_ = nh.advertiseService("/collect_world_robot_sample", &WorldRobotCalibrationNode::collectSample, this);
+    solve_srv_ = nh.advertiseService("/solve_world_robot_calibration", &WorldRobotCalibrationNode::solveCalibration, this);
+
+    ROS_INFO("[WorldRobot] 世界-机器人标定节点已启动");
+    ROS_INFO("[WorldRobot] world_frame=%s, robot_base_frame=%s, tool_frame=%s, camera_frame=%s, cube_frame=%s",
+             world_frame_.c_str(), robot_base_frame_.c_str(), tool_frame_.c_str(), camera_frame_.c_str(), cube_frame_.c_str());
+    ROS_INFO("[WorldRobot] 立方体偏移（法兰系）= [%.3f, %.3f, %.3f] m", cube_offset_.x(), cube_offset_.y(), cube_offset_.z());
+    ROS_INFO("[WorldRobot] 输出 YAML: %s", output_yaml_path_.c_str());
+
+    loadExistingCalibration();
+
+    if (publish_tf_)
+    {
+      tf_timer_ = nh.createTimer(ros::Duration(0.05), &WorldRobotCalibrationNode::publishSolution, this);
+    }
+  }
 
 private:
-    ros::Subscriber cube_pose_sub_;
-    ros::Subscriber joint_state_sub_;
-    ros::ServiceServer calibrate_service_;
-    ros::ServiceServer collect_data_service_;
-    ros::Publisher calibration_result_pub_;
-    ros::ServiceClient joint_move_client_;
-    
-    tf2_ros::Buffer tf_buffer_;
-    tf2_ros::TransformListener tf_listener_;
-    
-    std::vector<Eigen::Matrix4d> robot_poses_;  // 机械臂末端位姿（相对于基座）
-    std::vector<Eigen::Matrix4d> cube_poses_in_world_; // 立方体在世界坐标系中的位姿
-    
-    geometry_msgs::PoseStamped current_cube_pose_;
-    sensor_msgs::JointState current_joint_state_;
-    bool has_new_cube_data_ = false;
-    bool has_new_joint_data_ = false;
-    
-    std::string world_frame_;
-    std::string robot_base_frame_;
-    std::string tool_frame_;
-    std::string camera_frame_;
-    std::string cube_frame_;
+  ros::Subscriber cube_sub_;
+  ros::ServiceServer collect_srv_;
+  ros::ServiceServer solve_srv_;
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
+  tf2_ros::TransformBroadcaster tf_broadcaster_;
+  ros::Timer tf_timer_;
 
-    void cubePoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
+  struct ResidualStats
+  {
+    size_t sample_count = 0;
+    double position_mean_m = 0.0;
+    double position_std_m = 0.0;
+    double position_rmse_m = 0.0;
+    double position_max_m = 0.0;
+
+    double orientation_mean_deg = 0.0;
+    double orientation_std_deg = 0.0;
+    double orientation_rmse_deg = 0.0;
+    double orientation_max_deg = 0.0;
+
+    double extrinsic_pos_mean_m = 0.0;
+    double extrinsic_pos_std_m = 0.0;
+    double extrinsic_pos_rmse_m = 0.0;
+    double extrinsic_pos_max_m = 0.0;
+
+    double extrinsic_rot_mean_deg = 0.0;
+    double extrinsic_rot_std_deg = 0.0;
+    double extrinsic_rot_rmse_deg = 0.0;
+    double extrinsic_rot_max_deg = 0.0;
+  };
+
+  geometry_msgs::PoseStamped latest_cube_pose_;
+  bool has_cube_pose_ = false;
+
+  std::vector<Eigen::Vector3d> base_cube_positions_;
+  std::vector<Eigen::Quaterniond> base_cube_rotations_;
+  std::vector<Eigen::Vector3d> world_cube_positions_;
+  std::vector<Eigen::Quaterniond> world_cube_rotations_;
+
+  std::string world_frame_;
+  std::string robot_base_frame_;
+  std::string tool_frame_;
+  std::string camera_frame_;
+  std::string cube_frame_;
+  std::string cube_topic_;
+  std::string output_yaml_path_;
+  int min_samples_ = 10;
+  bool publish_tf_ = false;
+
+  Eigen::Vector3d cube_offset_{0.0, 0.0, 0.077};
+
+  bool has_solution_ = false;
+  geometry_msgs::TransformStamped solution_tf_;
+
+  void cubeCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
+  {
+    latest_cube_pose_ = *msg;
+    has_cube_pose_ = true;
+
+    geometry_msgs::TransformStamped T_world_cam_msg;
+    if (!lookupTransform(world_frame_, camera_frame_, msg->header.stamp, T_world_cam_msg))
     {
-        current_cube_pose_ = *msg;
-        has_new_cube_data_ = true;
+      return;
     }
 
-    void jointStateCallback(const sensor_msgs::JointState::ConstPtr& msg)
+    Eigen::Isometry3d T_world_cam = transformToEigen(T_world_cam_msg.transform);
+    Eigen::Isometry3d T_cam_cube = poseToEigen(msg->pose);
+    Eigen::Isometry3d T_world_cube = T_world_cam * T_cam_cube;
+
+    Eigen::Vector3d p_w = T_world_cube.translation();
+    Eigen::Quaterniond q_w(T_world_cube.rotation());
+    q_w.normalize();
+
+    ROS_INFO_STREAM_THROTTLE(0.5, "[WorldRobotCalib] cube in world:\n"
+                                   << "  pos  = (" << p_w.x() << ", " << p_w.y() << ", " << p_w.z() << ")\n"
+                                   << "  quat = (" << q_w.x() << ", " << q_w.y() << ", " << q_w.z() << ", " << q_w.w() << ")");
+  }
+
+  bool collectSample(jaka_close_contro::WorldRobotCollectSample::Request &,
+                     jaka_close_contro::WorldRobotCollectSample::Response &res)
+  {
+    if (!has_cube_pose_)
     {
-        current_joint_state_ = *msg;
-        has_new_joint_data_ = true;
+      res.success = false;
+      res.message = "尚未接收到立方体融合位姿";
+      ROS_WARN("[WorldRobot] 未收到 /cube_center_fused，无法采样");
+      return true;
     }
 
-    bool collectCalibrationData(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res)
-    {
-        ROS_INFO("Collecting world-robot calibration data...");
-        
-        if (!has_new_cube_data_ || !has_new_joint_data_) {
-            ROS_WARN("No cube pose or joint data available");
-            res.success = false;
-            res.message = "No data available";
-            return true;
-        }
+    const ros::Time stamp = latest_cube_pose_.header.stamp;
 
-        try {
-            // 获取立方体在相机坐标系中的位姿
-            geometry_msgs::TransformStamped T_cam_cube_msg;
-            T_cam_cube_msg = tf_buffer_.lookupTransform(camera_frame_, cube_frame_, ros::Time(0), ros::Duration(1.0));
-            
-            // 获取相机在世界坐标系中的位姿
-            geometry_msgs::TransformStamped T_world_cam_msg;
-            T_world_cam_msg = tf_buffer_.lookupTransform(world_frame_, camera_frame_, ros::Time(0), ros::Duration(1.0));
-            
-            // 转换为Eigen矩阵
-            Eigen::Matrix4d T_cam_cube = transformToEigen(T_cam_cube_msg.transform);
-            Eigen::Matrix4d T_world_cam = transformToEigen(T_world_cam_msg.transform);
-            
-            // 计算立方体在世界坐标系中的位姿
-            Eigen::Matrix4d T_world_cube = T_world_cam * T_cam_cube;
-            
-            // 获取机械臂末端在基座坐标系中的位姿（从关节角度计算）
-            Eigen::Matrix4d T_robot_base_tool = calculateRobotPose(current_joint_state_);
-            
-            // 存储数据
-            robot_poses_.push_back(T_robot_base_tool);
-            cube_poses_in_world_.push_back(T_world_cube);
-            
-            ROS_INFO("Collected world-robot calibration data point. Total: %ld", robot_poses_.size());
-            ROS_INFO("Cube position in world: [%.3f, %.3f, %.3f]", 
-                     T_world_cube(0, 3), T_world_cube(1, 3), T_world_cube(2, 3));
-            ROS_INFO("Tool position in robot base: [%.3f, %.3f, %.3f]", 
-                     T_robot_base_tool(0, 3), T_robot_base_tool(1, 3), T_robot_base_tool(2, 3));
-            
-            res.success = true;
-            res.message = "Data collected successfully";
-            return true;
-        }
-        catch (tf2::TransformException& ex) {
-            ROS_ERROR("Transform lookup failed: %s", ex.what());
-            res.success = false;
-            res.message = "Transform lookup failed: " + std::string(ex.what());
-            return true;
-        }
+    geometry_msgs::TransformStamped T_world_cam_msg;
+    geometry_msgs::TransformStamped T_base_tool_msg;
+    if (!lookupTransform(world_frame_, camera_frame_, stamp, T_world_cam_msg))
+    {
+      res.success = false;
+      res.message = "缺少 world->camera TF";
+      return true;
+    }
+    if (!lookupTransform(robot_base_frame_, tool_frame_, stamp, T_base_tool_msg))
+    {
+      res.success = false;
+      res.message = "缺少 base->tool TF";
+      return true;
     }
 
-    bool calibrateWorldRobot(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res)
+    Eigen::Isometry3d T_world_cam = transformToEigen(T_world_cam_msg.transform);
+    Eigen::Isometry3d T_cam_cube = poseToEigen(latest_cube_pose_.pose);
+    Eigen::Isometry3d T_world_cube_meas = T_world_cam * T_cam_cube;
+
+    Eigen::Isometry3d T_base_tool = transformToEigen(T_base_tool_msg.transform);
+    Eigen::Isometry3d T_tool_cube = Eigen::Isometry3d::Identity();
+    T_tool_cube.translation() = cube_offset_;
+    Eigen::Isometry3d T_base_cube_pred = T_base_tool * T_tool_cube;
+
+    base_cube_positions_.push_back(T_base_cube_pred.translation());
+    base_cube_rotations_.push_back(Eigen::Quaterniond(T_base_cube_pred.rotation()));
+    world_cube_positions_.push_back(T_world_cube_meas.translation());
+    world_cube_rotations_.push_back(Eigen::Quaterniond(T_world_cube_meas.rotation()));
+
+    const size_t idx = base_cube_positions_.size();
+    const Eigen::Vector3d p_w = T_world_cube_meas.translation();
+    Eigen::Quaterniond q_w(T_world_cube_meas.rotation());
+    q_w.normalize();
+    const Eigen::Vector3d p_b = T_base_cube_pred.translation();
+    Eigen::Quaterniond q_b(T_base_cube_pred.rotation());
+    q_b.normalize();
+
+    ROS_INFO_STREAM("[WorldRobot] 采集样本 #" << idx
+                                            << "\n  world_cube_meas.pos  = ("
+                                            << p_w.x() << ", " << p_w.y() << ", " << p_w.z() << ")"
+                                            << "\n  world_cube_meas.quat = ("
+                                            << q_w.x() << ", " << q_w.y() << ", " << q_w.z() << ", " << q_w.w() << ")"
+                                            << "\n  base_cube_pred.pos   = ("
+                                            << p_b.x() << ", " << p_b.y() << ", " << p_b.z() << ")"
+                                            << "\n  base_cube_pred.quat  = ("
+                                            << q_b.x() << ", " << q_b.y() << ", " << q_b.z() << ", " << q_b.w() << ")");
+
+    res.world_cube_pos_x = p_w.x();
+    res.world_cube_pos_y = p_w.y();
+    res.world_cube_pos_z = p_w.z();
+    res.world_cube_quat_x = q_w.x();
+    res.world_cube_quat_y = q_w.y();
+    res.world_cube_quat_z = q_w.z();
+    res.world_cube_quat_w = q_w.w();
+
+    res.base_cube_pos_x = p_b.x();
+    res.base_cube_pos_y = p_b.y();
+    res.base_cube_pos_z = p_b.z();
+    res.base_cube_quat_x = q_b.x();
+    res.base_cube_quat_y = q_b.y();
+    res.base_cube_quat_z = q_b.z();
+    res.base_cube_quat_w = q_b.w();
+
+    res.success = true;
+    res.message = "采样成功，当前样本数=" + std::to_string(base_cube_positions_.size());
+    return true;
+  }
+
+  bool solveCalibration(jaka_close_contro::WorldRobotCalibration::Request &,
+                        jaka_close_contro::WorldRobotCalibration::Response &res)
+  {
+    const size_t n = base_cube_positions_.size();
+    if (n < static_cast<size_t>(min_samples_))
     {
-        ROS_INFO("Starting world-robot calibration...");
-        
-        if (robot_poses_.size() < 3) {
-            ROS_ERROR("Need at least 3 data points for calibration, current: %ld", robot_poses_.size());
-            res.success = false;
-            res.message = "Insufficient data points";
-            return true;
-        }
-        
-        // 执行世界-机器人标定
-        geometry_msgs::PoseStamped calibration_result = performWorldRobotCalibration();
-        
-        // 保存标定结果
-        saveCalibrationResult(calibration_result);
-        
-        // 发布标定结果
-        calibration_result_pub_.publish(calibration_result);
-        
-        // 清空数据
-        robot_poses_.clear();
-        cube_poses_in_world_.clear();
-        
-        res.success = true;
-        res.message = "World-robot calibration completed";
-        return true;
+      res.success = false;
+      res.message = "样本不足，至少需要 " + std::to_string(min_samples_) + " 组";
+      ROS_ERROR("[WorldRobot] 样本不足：%zu/%d", n, min_samples_);
+      return true;
     }
 
-    Eigen::Matrix4d transformToEigen(const geometry_msgs::Transform& t)
+    Eigen::Quaterniond q_wb = averageRotationPairs();
+    Eigen::Matrix3d R_wb = q_wb.toRotationMatrix();
+
+    Eigen::Vector3d mean_base = Eigen::Vector3d::Zero();
+    Eigen::Vector3d mean_world = Eigen::Vector3d::Zero();
+    for (size_t i = 0; i < n; ++i)
     {
-        Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
-        
-        // 位置
-        T(0, 3) = t.translation.x;
-        T(1, 3) = t.translation.y;
-        T(2, 3) = t.translation.z;
-        
-        // 四元数转旋转矩阵
-        Eigen::Quaterniond q(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z);
-        q.normalize();
-        Eigen::Matrix3d R = q.toRotationMatrix();
-        
-        T.block<3, 3>(0, 0) = R;
-        
-        return T;
+      mean_base += base_cube_positions_[i];
+      mean_world += world_cube_positions_[i];
+    }
+    mean_base /= static_cast<double>(n);
+    mean_world /= static_cast<double>(n);
+
+    Eigen::Vector3d t_wb = mean_world - R_wb * mean_base;
+
+    Eigen::Isometry3d T_wb = Eigen::Isometry3d::Identity();
+    T_wb.linear() = R_wb;
+    T_wb.translation() = t_wb;
+
+    solution_tf_ = eigenToTransform(T_wb);
+    solution_tf_.header.frame_id = world_frame_;
+    solution_tf_.child_frame_id = robot_base_frame_;
+    solution_tf_.header.stamp = ros::Time::now();
+    has_solution_ = true;
+
+    saveCalibration(solution_tf_);
+
+    ROS_INFO("[WorldRobot] 求解完成，world->%s: translation = [%.3f, %.3f, %.3f], rotation(xyzw) = [%.4f, %.4f, %.4f, %.4f]",
+             robot_base_frame_.c_str(),
+             t_wb.x(), t_wb.y(), t_wb.z(),
+             q_wb.x(), q_wb.y(), q_wb.z(), q_wb.w());
+    ROS_INFO("[WorldRobot] 如需静态发布，可在 launch 中添加：");
+    ROS_INFO("static_transform_publisher %.6f %.6f %.6f %.6f %.6f %.6f %.6f %s %s 10",
+             t_wb.x(), t_wb.y(), t_wb.z(),
+             q_wb.x(), q_wb.y(), q_wb.z(), q_wb.w(),
+             world_frame_.c_str(), robot_base_frame_.c_str());
+
+    res.success = true;
+    res.message = "标定完成";
+    res.translation.x = t_wb.x();
+    res.translation.y = t_wb.y();
+    res.translation.z = t_wb.z();
+    res.rotation.x = q_wb.x();
+    res.rotation.y = q_wb.y();
+    res.rotation.z = q_wb.z();
+    res.rotation.w = q_wb.w();
+
+    tf2::Transform T_WB_est;
+    tf2::Quaternion q_tf(q_wb.x(), q_wb.y(), q_wb.z(), q_wb.w());
+    q_tf.normalize();
+    T_WB_est.setRotation(q_tf);
+    T_WB_est.setOrigin(tf2::Vector3(t_wb.x(), t_wb.y(), t_wb.z()));
+
+    const ResidualStats stats = computeResidualStats(T_WB_est);
+
+    res.position_rmse_m = stats.position_rmse_m;
+    res.position_mean_m = stats.position_mean_m;
+    res.position_std_m = stats.position_std_m;
+    res.position_max_m = stats.position_max_m;
+
+    res.orientation_rmse_deg = stats.orientation_rmse_deg;
+    res.orientation_mean_deg = stats.orientation_mean_deg;
+    res.orientation_std_deg = stats.orientation_std_deg;
+    res.orientation_max_deg = stats.orientation_max_deg;
+
+    res.extrinsic_pos_rmse_m = stats.extrinsic_pos_rmse_m;
+    res.extrinsic_pos_mean_m = stats.extrinsic_pos_mean_m;
+    res.extrinsic_pos_std_m = stats.extrinsic_pos_std_m;
+    res.extrinsic_pos_max_m = stats.extrinsic_pos_max_m;
+
+    res.extrinsic_rot_rmse_deg = stats.extrinsic_rot_rmse_deg;
+    res.extrinsic_rot_mean_deg = stats.extrinsic_rot_mean_deg;
+    res.extrinsic_rot_std_deg = stats.extrinsic_rot_std_deg;
+    res.extrinsic_rot_max_deg = stats.extrinsic_rot_max_deg;
+
+    return true;
+  }
+
+  bool lookupTransform(const std::string &parent,
+                       const std::string &child,
+                       const ros::Time &stamp,
+                       geometry_msgs::TransformStamped &out)
+  {
+    const ros::Time query_time = stamp.isZero() ? ros::Time(0) : stamp;
+    try
+    {
+      out = tf_buffer_.lookupTransform(parent, child, query_time, ros::Duration(1.0));
+      return true;
+    }
+    catch (const tf2::TransformException &ex)
+    {
+      ROS_ERROR_THROTTLE(1.0, "[WorldRobot] TF 查询失败 %s -> %s: %s", parent.c_str(), child.c_str(), ex.what());
+      return false;
+    }
+  }
+
+  Eigen::Isometry3d transformToEigen(const geometry_msgs::Transform &tf_msg)
+  {
+    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+    T.translation() = Eigen::Vector3d(tf_msg.translation.x, tf_msg.translation.y, tf_msg.translation.z);
+    Eigen::Quaterniond q(tf_msg.rotation.w, tf_msg.rotation.x, tf_msg.rotation.y, tf_msg.rotation.z);
+    q.normalize();
+    T.linear() = q.toRotationMatrix();
+    return T;
+  }
+
+  Eigen::Isometry3d poseToEigen(const geometry_msgs::Pose &pose)
+  {
+    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+    T.translation() = Eigen::Vector3d(pose.position.x, pose.position.y, pose.position.z);
+    Eigen::Quaterniond q(pose.orientation.w, pose.orientation.x, pose.orientation.y, pose.orientation.z);
+    q.normalize();
+    T.linear() = q.toRotationMatrix();
+    return T;
+  }
+
+  geometry_msgs::TransformStamped eigenToTransform(const Eigen::Isometry3d &T)
+  {
+    geometry_msgs::TransformStamped msg;
+    msg.transform.translation.x = T.translation().x();
+    msg.transform.translation.y = T.translation().y();
+    msg.transform.translation.z = T.translation().z();
+
+    Eigen::Quaterniond q(T.rotation());
+    q.normalize();
+    msg.transform.rotation.x = q.x();
+    msg.transform.rotation.y = q.y();
+    msg.transform.rotation.z = q.z();
+    msg.transform.rotation.w = q.w();
+    return msg;
+  }
+
+  Eigen::Quaterniond averageRotationPairs()
+  {
+    Eigen::Matrix4d A = Eigen::Matrix4d::Zero();
+    for (size_t i = 0; i < base_cube_rotations_.size(); ++i)
+    {
+      // R_wb_i = R_world_cube_i * R_base_cube_i^T
+      Eigen::Quaterniond q = world_cube_rotations_[i] * base_cube_rotations_[i].conjugate();
+      if (q.w() < 0)
+      {
+        q.coeffs() *= -1.0; // 避免符号翻转带来的平均失真
+      }
+      Eigen::Vector4d v(q.w(), q.x(), q.y(), q.z());
+      A += v * v.transpose();
     }
 
-Eigen::Matrix4d calculateRobotPose(const sensor_msgs::JointState& joint_state)
-{
-    // 使用 TF 查询机器人基座到工具末端的位姿，并尽量与最新的关节状态同步。
-    // 关节状态由仓库自带的 jaka_sdk_driver_node 发布，配合 robot_state_publisher 生成 TF。
-    Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> solver(A);
+    Eigen::Vector4d eigvec = solver.eigenvectors().col(3);
+    Eigen::Quaterniond q_avg(eigvec(0), eigvec(1), eigvec(2), eigvec(3));
+    q_avg.normalize();
+    return q_avg;
+  }
 
-    // 若关节时间戳为空，则退回最新 TF；否则按关节时间戳查询，提升同步性。
-    const ros::Time query_time = joint_state.header.stamp.isZero() ? ros::Time(0) : joint_state.header.stamp;
+  void publishSolution(const ros::TimerEvent &)
+  {
+    if (!publish_tf_ || !has_solution_)
+    {
+      return;
+    }
+    solution_tf_.header.stamp = ros::Time::now();
+    tf_broadcaster_.sendTransform(solution_tf_);
+  }
+
+  void saveCalibration(const geometry_msgs::TransformStamped &tf_msg)
+  {
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "world_frame" << YAML::Value << world_frame_;
+    emitter << YAML::Key << "robot_base_frame" << YAML::Value << robot_base_frame_;
+    emitter << YAML::Key << "translation" << YAML::Value;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "x" << YAML::Value << tf_msg.transform.translation.x;
+    emitter << YAML::Key << "y" << YAML::Value << tf_msg.transform.translation.y;
+    emitter << YAML::Key << "z" << YAML::Value << tf_msg.transform.translation.z;
+    emitter << YAML::EndMap;
+    emitter << YAML::Key << "rotation" << YAML::Value;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "x" << YAML::Value << tf_msg.transform.rotation.x;
+    emitter << YAML::Key << "y" << YAML::Value << tf_msg.transform.rotation.y;
+    emitter << YAML::Key << "z" << YAML::Value << tf_msg.transform.rotation.z;
+    emitter << YAML::Key << "w" << YAML::Value << tf_msg.transform.rotation.w;
+    emitter << YAML::EndMap;
+    emitter << YAML::EndMap;
 
     try
     {
-        geometry_msgs::TransformStamped T_base_tool_msg =
-            tf_buffer_.lookupTransform(robot_base_frame_,    // 源：机器人基座
-                                       tool_frame_,          // 目标：工具末端
-                                       query_time,
-                                       ros::Duration(1.0));
-
-        T = transformToEigen(T_base_tool_msg.transform);
+      std::ofstream fout(output_yaml_path_);
+      fout << emitter.c_str();
+      fout.close();
+      ROS_INFO("[WorldRobot] 标定结果已保存至 %s", output_yaml_path_.c_str());
     }
-    catch (tf2::TransformException& ex)
+    catch (const std::exception &e)
     {
-        ROS_ERROR_THROTTLE(1.0,
-                           "Failed to lookup TF %s -> %s for FK: %s",
-                           robot_base_frame_.c_str(),
-                           tool_frame_.c_str(),
-                           ex.what());
-        ROS_WARN_THROTTLE(5.0,
-                          "Using Identity for T_robot_base_tool due to missing TF. "
-                          "Calibration accuracy will be very poor!");
+      ROS_ERROR("[WorldRobot] 保存标定文件失败: %s", e.what());
     }
+  }
 
-    return T;
-}
+  ResidualStats computeResidualStats(const tf2::Transform &T_WB_est)
+  {
+    ResidualStats stats;
+    const size_t N = base_cube_positions_.size();
+    stats.sample_count = N;
 
-
-    geometry_msgs::PoseStamped performWorldRobotCalibration()
+    if (N == 0)
     {
-        ROS_INFO("Performing world-robot calibration with %ld data points", robot_poses_.size());
-        
-        if (robot_poses_.size() < 2) {
-            ROS_ERROR("Need at least 2 poses for calibration");
-            geometry_msgs::PoseStamped result;
-            result.header.frame_id = robot_base_frame_;
-            result.header.stamp = ros::Time::now();
-            return result;
-        }
-
-        // 将问题转化为 AX = XB 的形式
-        // A: 机器人基座到工具的变换变化 (T_robot_base_tool_i * T_robot_base_tool_j^(-1))
-        // B: 世界到立方体的变换变化 (T_world_cube_i * T_world_cube_j^(-1))
-        // X: 世界到机器人基座的变换 (T_world_robot_base)
-        
-        std::vector<Eigen::Matrix4d> A_transforms;
-        std::vector<Eigen::Matrix4d> B_transforms;
-        
-        // 计算相邻位姿之间的变换差
-        for (size_t i = 1; i < robot_poses_.size(); ++i) {
-            Eigen::Matrix4d T_robot_base_tool_i = robot_poses_[i-1];
-            Eigen::Matrix4d T_robot_base_tool_j = robot_poses_[i];
-            
-            Eigen::Matrix4d T_robot_base_tool_diff = T_robot_base_tool_j * T_robot_base_tool_i.inverse();
-            
-            Eigen::Matrix4d T_world_cube_i = cube_poses_in_world_[i-1];
-            Eigen::Matrix4d T_world_cube_j = cube_poses_in_world_[i];
-            
-            Eigen::Matrix4d T_world_cube_diff = T_world_cube_j * T_world_cube_i.inverse();
-            
-            A_transforms.push_back(T_robot_base_tool_diff);
-            B_transforms.push_back(T_world_cube_diff);
-        }
-        
-        if (A_transforms.empty()) {
-            ROS_ERROR("No transform differences calculated");
-            geometry_msgs::PoseStamped result;
-            result.header.frame_id = robot_base_frame_;
-            result.header.stamp = ros::Time::now();
-            return result;
-        }
-
-        // 使用Tsai手眼标定算法求解旋转部分
-        Eigen::Matrix3d R_world_robot_base = solveRotationAXB(A_transforms, B_transforms);
-        
-        // 求解平移部分
-        Eigen::Vector3d t_world_robot_base = solveTranslationAXB(A_transforms, B_transforms, R_world_robot_base);
-        
-        // 构造最终的变换矩阵
-        Eigen::Matrix4d T_world_robot_base = Eigen::Matrix4d::Identity();
-        T_world_robot_base.block<3, 3>(0, 0) = R_world_robot_base;
-        T_world_robot_base.block<3, 1>(0, 3) = t_world_robot_base;
-        
-        // 转换为四元数
-        Eigen::Quaterniond quat(R_world_robot_base);
-        quat.normalize();
-        
-        geometry_msgs::PoseStamped result;
-        // 使用参数指定的世界坐标系名称，避免硬编码导致的 TF 不一致
-        result.header.frame_id = world_frame_;
-        result.header.stamp = ros::Time::now();
-        result.pose.position.x = t_world_robot_base.x();
-        result.pose.position.y = t_world_robot_base.y();
-        result.pose.position.z = t_world_robot_base.z();
-        result.pose.orientation.w = quat.w();
-        result.pose.orientation.x = quat.x();
-        result.pose.orientation.y = quat.y();
-        result.pose.orientation.z = quat.z();
-        
-        ROS_INFO("World-robot calibration completed");
-        ROS_INFO("Result: pos=[%.3f,%.3f,%.3f], quat=[%.3f,%.3f,%.3f,%.3f]",
-                 result.pose.position.x, result.pose.position.y, result.pose.position.z,
-                 result.pose.orientation.w, result.pose.orientation.x, 
-                 result.pose.orientation.y, result.pose.orientation.z);
-        
-        return result;
+      ROS_WARN("[WorldRobot] 无样本可计算残差统计");
+      return stats;
     }
-
-    // 使用Tsai算法求解AX=XB问题的旋转部分
-    Eigen::Matrix3d solveRotationAXB(const std::vector<Eigen::Matrix4d>& A, const std::vector<Eigen::Matrix4d>& B)
+    if (N < 2)
     {
-        std::vector<Eigen::Vector3d> a_vectors; // 从A变换提取的旋转轴
-        std::vector<Eigen::Vector3d> b_vectors; // 从B变换提取的旋转轴
-        
-        for (size_t i = 0; i < A.size(); ++i) {
-            Eigen::Matrix3d Ra = A[i].block<3, 3>(0, 0);
-            Eigen::Matrix3d Rb = B[i].block<3, 3>(0, 0);
-            
-            // 计算旋转轴和角度
-            Eigen::AngleAxisd aa_a(Ra);
-            Eigen::AngleAxisd aa_b(Rb);
-            
-            if (std::abs(aa_a.angle()) > 1e-6 && std::abs(aa_b.angle()) > 1e-6) {
-                a_vectors.push_back(aa_a.axis() * aa_a.angle());
-                b_vectors.push_back(aa_b.axis() * aa_b.angle());
-            }
-        }
-        
-        if (a_vectors.size() < 2) {
-            ROS_WARN("Not enough rotation data points for calibration, using identity rotation");
-            return Eigen::Matrix3d::Identity();
-        }
-        
-        // 构建方程组求解旋转矩阵
-        Eigen::Matrix3d M = Eigen::Matrix3d::Zero();
-        for (size_t i = 0; i < a_vectors.size(); ++i) {
-            M += b_vectors[i] * a_vectors[i].transpose();
-        }
-        
-        // 使用SVD分解求解旋转矩阵
-        Eigen::JacobiSVD<Eigen::Matrix3d> svd(M, Eigen::ComputeFullU | Eigen::ComputeFullV);
-        Eigen::Matrix3d R = svd.matrixU() * svd.matrixV().transpose();
-        
-        // 确保行列式为正（避免镜像）
-        if (R.determinant() < 0) {
-            Eigen::Matrix3d tmp = Eigen::Matrix3d::Identity();
-            tmp(2, 2) = -1.0;
-            R = svd.matrixU() * tmp * svd.matrixV().transpose();
-        }
-        
-        return R;
+      ROS_WARN("[WorldRobot] 样本不足，无法计算有效统计量 (N=%zu)", N);
     }
 
-   // 求解 AX = XB 问题的平移部分
-Eigen::Vector3d solveTranslationAXB(const std::vector<Eigen::Matrix4d>& A,
-                                   const std::vector<Eigen::Matrix4d>& B,
-                                   const Eigen::Matrix3d& R_world_robot_base)
-{
-    // 由 AX = XB 在 SE(3) 上展开可得：
-    //   R_a t_x + t_a = R_x t_b + t_x
-    // => (R_a - I) t_x = R_x t_b - t_a
-    // 其中 R_x 就是已由 solveRotationAXB 求得的 R_world_robot_base。
-    const size_t N = A.size();
-
-    Eigen::MatrixXd C(3 * N, 3);
-    Eigen::VectorXd d(3 * N);
+    std::vector<double> pos_errs;
+    std::vector<double> rot_errs_deg;
+    std::vector<double> extrinsic_disp_pos;
+    std::vector<double> extrinsic_disp_rot_deg;
+    pos_errs.reserve(N);
+    rot_errs_deg.reserve(N);
+    extrinsic_disp_pos.reserve(N);
+    extrinsic_disp_rot_deg.reserve(N);
 
     for (size_t i = 0; i < N; ++i)
     {
-        Eigen::Vector3d ta = A[i].block<3,1>(0,3);
-        Eigen::Vector3d tb = B[i].block<3,1>(0,3);
-        Eigen::Matrix3d Ra = A[i].block<3,3>(0,0);
+      tf2::Transform T_W_cube_meas;
+      tf2::Quaternion q_w(world_cube_rotations_[i].x(), world_cube_rotations_[i].y(), world_cube_rotations_[i].z(), world_cube_rotations_[i].w());
+      q_w.normalize();
+      T_W_cube_meas.setOrigin(tf2::Vector3(world_cube_positions_[i].x(), world_cube_positions_[i].y(), world_cube_positions_[i].z()));
+      T_W_cube_meas.setRotation(q_w);
 
-        // 右端项：R_x * t_b - t_a
-        Eigen::Vector3d rhs = R_world_robot_base * tb - ta;
+      tf2::Transform T_B_cube_pred;
+      tf2::Quaternion q_b(base_cube_rotations_[i].x(), base_cube_rotations_[i].y(), base_cube_rotations_[i].z(), base_cube_rotations_[i].w());
+      q_b.normalize();
+      T_B_cube_pred.setOrigin(tf2::Vector3(base_cube_positions_[i].x(), base_cube_positions_[i].y(), base_cube_positions_[i].z()));
+      T_B_cube_pred.setRotation(q_b);
 
-        // 系数矩阵：R_a - I
-        C.block<3,3>(3 * i, 0) = Ra - Eigen::Matrix3d::Identity();
-        d.segment<3>(3 * i)    = rhs;
+      tf2::Transform T_W_cube_pred = T_WB_est * T_B_cube_pred;
+      tf2::Transform T_err = T_W_cube_pred.inverse() * T_W_cube_meas;
+
+      tf2::Vector3 t_err = T_err.getOrigin();
+      double e_t = t_err.length();
+      tf2::Quaternion q_err = T_err.getRotation();
+      q_err.normalize();
+      double e_R = q_err.getAngle() * 180.0 / M_PI;
+
+      tf2::Transform T_WB_i = T_W_cube_meas * T_B_cube_pred.inverse();
+      tf2::Transform T_disp = T_WB_est.inverse() * T_WB_i;
+      tf2::Vector3 t_disp = T_disp.getOrigin();
+      double e_t_disp = t_disp.length();
+      tf2::Quaternion q_disp = T_disp.getRotation();
+      q_disp.normalize();
+      double e_R_disp = q_disp.getAngle() * 180.0 / M_PI;
+
+      pos_errs.push_back(e_t);
+      rot_errs_deg.push_back(e_R);
+      extrinsic_disp_pos.push_back(e_t_disp);
+      extrinsic_disp_rot_deg.push_back(e_R_disp);
     }
 
-    // 使用最小二乘法求解 t_world_robot_base
-    Eigen::Vector3d t_world_robot_base = C.colPivHouseholderQr().solve(d);
-
-    return t_world_robot_base;
-}
-
-
-    void saveCalibrationResult(const geometry_msgs::PoseStamped& result)
+    auto computeStats = [](const std::vector<double> &v,
+                           double &mean, double &stddev,
+                           double &rmse, double &maxv)
     {
-        YAML::Node config;
-        config["world_robot_calibration"]["position"]["x"] = result.pose.position.x;
-        config["world_robot_calibration"]["position"]["y"] = result.pose.position.y;
-        config["world_robot_calibration"]["position"]["z"] = result.pose.position.z;
-        config["world_robot_calibration"]["orientation"]["w"] = result.pose.orientation.w;
-        config["world_robot_calibration"]["orientation"]["x"] = result.pose.orientation.x;
-        config["world_robot_calibration"]["orientation"]["y"] = result.pose.orientation.y;
-        config["world_robot_calibration"]["orientation"]["z"] = result.pose.orientation.z;
-        
-        std::ofstream file("/tmp/world_robot_calibration.yaml");
-        file << config;
-        file.close();
-        
-        ROS_INFO("Calibration result saved to /tmp/world_robot_calibration.yaml");
+      const size_t n = v.size();
+      if (n == 0)
+      {
+        mean = stddev = rmse = maxv = 0.0;
+        return;
+      }
+      double sum = 0.0;
+      double sum_sq = 0.0;
+      maxv = 0.0;
+      for (double x : v)
+      {
+        sum += x;
+        sum_sq += x * x;
+        if (x > maxv)
+        {
+          maxv = x;
+        }
+      }
+      mean = sum / static_cast<double>(n);
+      rmse = std::sqrt(sum_sq / static_cast<double>(n));
+      if (n > 1)
+      {
+        double var = 0.0;
+        for (double x : v)
+        {
+          double d = x - mean;
+          var += d * d;
+        }
+        var /= static_cast<double>(n - 1);
+        stddev = std::sqrt(var);
+      }
+      else
+      {
+        stddev = 0.0;
+      }
+    };
+
+    computeStats(pos_errs, stats.position_mean_m, stats.position_std_m, stats.position_rmse_m, stats.position_max_m);
+    computeStats(rot_errs_deg, stats.orientation_mean_deg, stats.orientation_std_deg, stats.orientation_rmse_deg, stats.orientation_max_deg);
+    computeStats(extrinsic_disp_pos, stats.extrinsic_pos_mean_m, stats.extrinsic_pos_std_m, stats.extrinsic_pos_rmse_m, stats.extrinsic_pos_max_m);
+    computeStats(extrinsic_disp_rot_deg, stats.extrinsic_rot_mean_deg, stats.extrinsic_rot_std_deg, stats.extrinsic_rot_rmse_deg, stats.extrinsic_rot_max_deg);
+
+    if (N >= 1)
+    {
+      ROS_INFO_STREAM("=== World-Robot Calibration Residuals (N=" << N << ") ===");
+      ROS_INFO_STREAM("Position residual | RMSE = " << stats.position_rmse_m << " m"
+                                                   << ", mean = " << stats.position_mean_m << " m"
+                                                   << ", std = " << stats.position_std_m << " m"
+                                                   << ", max = " << stats.position_max_m << " m");
+      ROS_INFO_STREAM("Orientation residual | RMSE = " << stats.orientation_rmse_deg << " deg"
+                                                       << ", mean = " << stats.orientation_mean_deg << " deg"
+                                                       << ", std = " << stats.orientation_std_deg << " deg"
+                                                       << ", max = " << stats.orientation_max_deg << " deg");
+      ROS_INFO_STREAM("Extrinsic dispersion (world->base) - translation | RMSE = " << stats.extrinsic_pos_rmse_m << " m"
+                                                                                   << ", mean = " << stats.extrinsic_pos_mean_m << " m"
+                                                                                   << ", std = " << stats.extrinsic_pos_std_m << " m"
+                                                                                   << ", max = " << stats.extrinsic_pos_max_m << " m");
+      ROS_INFO_STREAM("Extrinsic dispersion (world->base) - orientation | RMSE = " << stats.extrinsic_rot_rmse_deg << " deg"
+                                                                                   << ", mean = " << stats.extrinsic_rot_mean_deg << " deg"
+                                                                                   << ", std = " << stats.extrinsic_rot_std_deg << " deg"
+                                                                                   << ", max = " << stats.extrinsic_rot_max_deg << " deg");
     }
+
+    return stats;
+  }
+
+  void loadExistingCalibration()
+  {
+    try
+    {
+      YAML::Node node = YAML::LoadFile(output_yaml_path_);
+      if (!node["translation"] || !node["rotation"])
+      {
+        return;
+      }
+
+      geometry_msgs::TransformStamped tf_msg;
+      tf_msg.header.frame_id = node["world_frame"] ? node["world_frame"].as<std::string>() : world_frame_;
+      tf_msg.child_frame_id = node["robot_base_frame"] ? node["robot_base_frame"].as<std::string>() : robot_base_frame_;
+      tf_msg.transform.translation.x = node["translation"]["x"].as<double>();
+      tf_msg.transform.translation.y = node["translation"]["y"].as<double>();
+      tf_msg.transform.translation.z = node["translation"]["z"].as<double>();
+      tf_msg.transform.rotation.x = node["rotation"]["x"].as<double>();
+      tf_msg.transform.rotation.y = node["rotation"]["y"].as<double>();
+      tf_msg.transform.rotation.z = node["rotation"]["z"].as<double>();
+      tf_msg.transform.rotation.w = node["rotation"]["w"].as<double>();
+      tf_msg.header.stamp = ros::Time::now();
+
+      solution_tf_ = tf_msg;
+      has_solution_ = true;
+      ROS_INFO("[WorldRobot] 已加载历史标定结果并可选发布 TF");
+    }
+    catch (const std::exception &e)
+    {
+      ROS_WARN("[WorldRobot] 未找到已保存的标定文件或解析失败（%s），将从零开始采样", e.what());
+    }
+  }
 };
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "world_robot_calibration_node");
-    ros::NodeHandle nh("~");
-    
-    WorldRobotCalibrationNode cal_node(nh);
-    
-    ros::spin();
-    return 0;
+  ros::init(argc, argv, "world_robot_calibration_node");
+  ros::NodeHandle nh;
+  ros::NodeHandle pnh("~");
+
+  WorldRobotCalibrationNode node(nh, pnh);
+  ros::spin();
+  return 0;
 }

@@ -16,7 +16,10 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   fiducial_msgs
   zed_wrapper
+  jaka_msgs
   jaka_sdk_driver
+  std_srvs
+  message_generation
 )
 
 find_package(OpenCV REQUIRED)
@@ -24,18 +27,32 @@ find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(Ceres REQUIRED)
 
+add_service_files(FILES
+  WorldRobotCalibration.srv
+  WorldRobotCollectSample.srv
+)
+
+generate_messages(
+  DEPENDENCIES
+    geometry_msgs
+    std_msgs
+)
+
 catkin_package(
-  CATKIN_DEPENDS 
-    roscpp 
-    sensor_msgs 
-    geometry_msgs 
-    tf2 
-    tf2_ros 
+  CATKIN_DEPENDS
+    roscpp
+    sensor_msgs
+    geometry_msgs
+    tf2
+    tf2_ros
     tf2_geometry_msgs
-    cv_bridge 
-    fiducial_msgs 
+    cv_bridge
+    fiducial_msgs
     zed_wrapper
+    jaka_msgs
     jaka_sdk_driver
+    std_srvs
+    message_runtime
   INCLUDE_DIRS include
   LIBRARIES ${PROJECT_NAME}
 )
@@ -68,14 +85,6 @@ target_link_libraries(world_tag_node
   ${catkin_LIBRARIES}
 )
 
-# 手眼标定节点
-add_executable(calibration_node src/calibration_node.cpp)
-target_link_libraries(calibration_node
-  ${catkin_LIBRARIES}
-  ${OpenCV_LIBS}
-  ${YAML_CPP_LIBRARIES}
-)
-
 # 4. 末端正方体多面融合 (关键修正)
 add_executable(cube_multi_face_fusion_node src/cube_multi_face_fusion_node.cpp)
 target_link_libraries(cube_multi_face_fusion_node
@@ -97,6 +106,20 @@ target_link_libraries(closed_loop_control_node
   ${EIGEN3_LIBRARIES}
 )
 
+# 6. 世界-机器人外参发布器
+add_executable(world_robot_extrinsic_broadcaster_node src/world_robot_extrinsic_broadcaster_node.cpp)
+target_link_libraries(world_robot_extrinsic_broadcaster_node
+  ${catkin_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
+)
+
+# 6+. 世界系闭环观测/控制节点
+add_executable(cube_world_closedloop_node src/cube_world_closedloop_node.cpp)
+target_link_libraries(cube_world_closedloop_node
+  ${catkin_LIBRARIES}
+  ${EIGEN3_LIBRARIES}
+)
+
 # 7. 世界-机器人标定节点
 add_executable(world_robot_calibration_node src/world_robot_calibration_node.cpp)
 target_link_libraries(world_robot_calibration_node
@@ -104,6 +127,28 @@ target_link_libraries(world_robot_calibration_node
   ${YAML_CPP_LIBRARIES}
   ${EIGEN3_LIBRARIES}
 )
+add_dependencies(world_robot_calibration_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+# 8. 自动标定管理与运动执行
+add_executable(world_robot_autocalib_manager_node src/world_robot_autocalib_manager_node.cpp)
+target_link_libraries(world_robot_autocalib_manager_node
+  ${catkin_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
+)
+add_dependencies(world_robot_autocalib_manager_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+add_executable(world_robot_calib_motion_node src/world_robot_calib_motion_node.cpp)
+target_link_libraries(world_robot_calib_motion_node
+  ${catkin_LIBRARIES}
+)
+add_dependencies(world_robot_calib_motion_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+# 9. 关节状态适配（jaka_driver -> /joint_states）
+add_executable(jaka_state_adapter_node src/jaka_state_adapter_node.cpp)
+target_link_libraries(jaka_state_adapter_node
+  ${catkin_LIBRARIES}
+)
+add_dependencies(jaka_state_adapter_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 # 安装配置文件
 install(DIRECTORY launch config
