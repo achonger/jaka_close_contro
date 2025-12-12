@@ -36,25 +36,25 @@ public:
     pnh.param<double>("linear_speed_mm_s", linear_speed_mm_s_, 80.0);
     pnh.param<double>("linear_acc_mm_s2", linear_acc_mm_s2_, 200.0);
 
+    const bool has_wait_before = pnh.getParam("wait_before_sample_sec", wait_before_sample_sec_);
+    const bool has_wait_after = pnh.getParam("wait_after_sample_sec", wait_after_sample_sec_);
     const bool has_pre = pnh.getParam("pre_sample_wait_sec", pre_sample_wait_sec_);
     const bool has_post = pnh.getParam("post_sample_wait_sec", post_sample_wait_sec_);
-    if (!has_pre && !has_post)
+
+    if (!has_wait_before && has_pre)
+    {
+      wait_before_sample_sec_ = pre_sample_wait_sec_;
+    }
+    if (!has_wait_after && has_post)
+    {
+      wait_after_sample_sec_ = post_sample_wait_sec_;
+    }
+
+    if (!has_wait_before && !has_pre)
     {
       // 兼容旧参数：如果未提供新参数，则沿用 hold_time_after_reach
       pnh.param<double>("hold_time_after_reach", hold_time_after_reach_, 1.0);
-      pre_sample_wait_sec_ = hold_time_after_reach_;
-      post_sample_wait_sec_ = 0.0;
-    }
-    else
-    {
-      if (!has_pre)
-      {
-        pre_sample_wait_sec_ = 5.0;
-      }
-      if (!has_post)
-      {
-        post_sample_wait_sec_ = 2.0;
-      }
+      wait_before_sample_sec_ = hold_time_after_reach_;
     }
 
     pnh.param<std::string>("collect_sample_service", collect_sample_service_, std::string("/collect_world_robot_sample"));
@@ -73,7 +73,7 @@ public:
     ROS_INFO("[CalibMotion] 臂标识=%s, 标定姿态数: %zu", arm_name_.c_str(), poses_.size());
     ROS_INFO("[CalibMotion] 速度缩放=%.2f, 线速度=%.1f mm/s, 线加速度=%.1f mm/s^2", speed_scale_,
              linear_speed_mm_s_, linear_acc_mm_s2_);
-    ROS_INFO("[CalibMotion] 到位等待：采样前 %.2f s，采样后 %.2f s", pre_sample_wait_sec_, post_sample_wait_sec_);
+    ROS_INFO("[CalibMotion] 到位等待：采样前 %.2f s，采样后 %.2f s", wait_before_sample_sec_, wait_after_sample_sec_);
     ROS_INFO("[CalibMotion] CSV 文件: %s", calib_pose_csv_.c_str());
     ROS_INFO("[CalibMotion] linear_move 服务: %s", linear_move_service_.c_str());
     ROS_INFO("[CalibMotion] collect_sample 服务: %s, 是否主动触发=%s", collect_sample_service_.c_str(),
@@ -92,8 +92,10 @@ private:
   double linear_speed_mm_s_ = 80.0;
   double linear_acc_mm_s2_ = 200.0;
   double hold_time_after_reach_ = 1.0;
-  double pre_sample_wait_sec_ = 5.0;
-  double post_sample_wait_sec_ = 2.0;
+  double pre_sample_wait_sec_ = 5.0;  // 兼容旧参数
+  double post_sample_wait_sec_ = 2.0; // 兼容旧参数
+  double wait_before_sample_sec_ = 5.0;
+  double wait_after_sample_sec_ = 2.0;
   std::string collect_sample_service_ = "/collect_world_robot_sample";
   bool trigger_sample_service_ = true;
 
@@ -180,8 +182,9 @@ private:
   {
     const double DEG2RAD = M_PI / 180.0;
     jaka_msgs::Move srv;
-    srv.request.pose = {target.x_mm, target.y_mm, target.z_mm,
-                        target.rx_deg * DEG2RAD, target.ry_deg * DEG2RAD, target.rz_deg * DEG2RAD};
+    srv.request.pose = {static_cast<float>(target.x_mm), static_cast<float>(target.y_mm), static_cast<float>(target.z_mm),
+                        static_cast<float>(target.rx_deg * DEG2RAD), static_cast<float>(target.ry_deg * DEG2RAD),
+                        static_cast<float>(target.rz_deg * DEG2RAD)};
     srv.request.mvvelo = linear_speed_mm_s_ * speed_scale_;
     srv.request.mvacc = linear_acc_mm_s2_ * speed_scale_;
     srv.request.mvtime = 0.0;
@@ -254,8 +257,10 @@ private:
     {
       const auto &p = poses_[i];
       target_index_ = i;
-      ROS_INFO("[CalibMotion] 执行标定位姿 #%zu (%s): pos(mm)=(%.1f, %.1f, %.1f), rpy(deg)=(%.1f, %.1f, %.1f)", i + 1,
-               p.name.c_str(), p.x_mm, p.y_mm, p.z_mm, p.rx_deg, p.ry_deg, p.rz_deg);
+      ROS_INFO_STREAM("[CalibMotion] [" << ros::Time::now() << "] 发送 linear_move 到标定位姿 #" << (i + 1)
+                                           << " (" << p.name << "): pos(mm)=(" << p.x_mm << ", " << p.y_mm << ", "
+                                           << p.z_mm << "), rpy(deg)=(" << p.rx_deg << ", " << p.ry_deg << ", "
+                                           << p.rz_deg << ")");
 
       if (!sendLinearTarget(p))
       {
@@ -263,16 +268,18 @@ private:
         break;
       }
 
-      ROS_INFO("[CalibMotion] 已到达姿态 %s，采样前静止 %.2f s", p.name.c_str(), pre_sample_wait_sec_);
-      ros::Duration(pre_sample_wait_sec_).sleep();
+      ROS_INFO_STREAM("[CalibMotion] [" << ros::Time::now() << "] linear_move 返回，采样前静止 "
+                                          << wait_before_sample_sec_ << " s");
+      ros::Duration(wait_before_sample_sec_).sleep();
 
-      ROS_INFO("[CalibMotion] 开始采样触发（姿态 #%zu）", i + 1);
+      ROS_INFO_STREAM("[CalibMotion] [" << ros::Time::now() << "] 开始采样触发（姿态 #" << (i + 1) << ")");
       triggerSample(i, p.name);
 
-      ROS_INFO("[CalibMotion] 采样后继续静止 %.2f s", post_sample_wait_sec_);
-      ros::Duration(post_sample_wait_sec_).sleep();
+      ROS_INFO_STREAM("[CalibMotion] [" << ros::Time::now() << "] 采样结束，继续静止 "
+                                          << wait_after_sample_sec_ << " s");
+      ros::Duration(wait_after_sample_sec_).sleep();
 
-      ROS_INFO("[CalibMotion] 姿态 %s 完成，准备下一个点", p.name.c_str());
+      ROS_INFO_STREAM("[CalibMotion] [" << ros::Time::now() << "] 姿态 " << p.name << " 完成，准备下一个点");
     }
 
     ROS_INFO("[CalibMotion] 标定姿态序列执行完成");
