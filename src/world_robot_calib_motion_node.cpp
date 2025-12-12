@@ -42,6 +42,7 @@ public:
     pnh.param<double>("motion_stable_duration_sec", motion_stable_duration_sec_, 0.5);
     pnh.param<double>("motion_joint_threshold_rad", motion_joint_threshold_rad_, 0.002);
     pnh.param<std::string>("joint_state_topic", joint_state_topic_, std::string("/joint_states"));
+    pnh.param<double>("sample_duration_sec", sample_duration_sec_, 2.0);
 
     const bool has_wait_before = pnh.getParam("wait_before_sample_sec", wait_before_sample_sec_);
     const bool has_wait_after = pnh.getParam("wait_after_sample_sec", wait_after_sample_sec_);
@@ -83,7 +84,8 @@ public:
              linear_speed_mm_s_, linear_acc_mm_s2_);
     ROS_INFO("[CalibMotion] 等待停止阈值：关节Δ=%.4f rad，稳定时间=%.2f s，超时=%.1f s", motion_joint_threshold_rad_,
              motion_stable_duration_sec_, motion_done_timeout_sec_);
-    ROS_INFO("[CalibMotion] 到位等待：采样前 %.2f s，采样后 %.2f s", wait_before_sample_sec_, wait_after_sample_sec_);
+    ROS_INFO("[CalibMotion] 到位等待：采样前 %.2f s，采样后 %.2f s，采样窗口 %.2f s", wait_before_sample_sec_, wait_after_sample_sec_,
+             sample_duration_sec_);
     ROS_INFO("[CalibMotion] CSV 文件: %s", calib_pose_csv_.c_str());
     ROS_INFO("[CalibMotion] linear_move 服务: %s", linear_move_service_.c_str());
     ROS_INFO("[CalibMotion] collect_sample 服务: %s, 是否主动触发=%s", collect_sample_service_.c_str(),
@@ -109,6 +111,7 @@ private:
   double post_sample_wait_sec_ = 2.0; // 兼容旧参数
   double wait_before_sample_sec_ = 5.0;
   double wait_after_sample_sec_ = 2.0;
+  double sample_duration_sec_ = 2.0;
   std::string collect_sample_service_ = "/collect_world_robot_sample";
   bool trigger_sample_service_ = true;
   std::string joint_state_topic_ = "/joint_states";
@@ -393,8 +396,19 @@ private:
                                           << wait_before_sample_sec_ << " s");
       ros::Duration(wait_before_sample_sec_).sleep();
 
-      ROS_INFO_STREAM("[CalibMotion] [" << ros::Time::now() << "] 开始采样触发（姿态 #" << (i + 1) << ")");
-      triggerSample(i, p.name);
+      ROS_INFO_STREAM("[CalibMotion] [" << ros::Time::now() << "] 开始采样窗口（姿态 #" << (i + 1)
+                                         << ", 持续 " << sample_duration_sec_ << " s）");
+      const ros::Time sample_start = ros::Time::now();
+      std::size_t success_cnt = 0;
+      while (ros::ok() && (ros::Time::now() - sample_start).toSec() <= sample_duration_sec_)
+      {
+        if (triggerSample(i, p.name))
+        {
+          ++success_cnt;
+        }
+        ros::Duration(0.2).sleep();
+      }
+      ROS_INFO_STREAM("[CalibMotion] 采样窗口结束，成功次数=" << success_cnt);
 
       ROS_INFO_STREAM("[CalibMotion] [" << ros::Time::now() << "] 采样结束，继续静止 "
                                           << wait_after_sample_sec_ << " s");

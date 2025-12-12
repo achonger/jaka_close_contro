@@ -1,0 +1,2 @@
+# 自动生成的联合标定采样文件（运行自动标定后会覆盖）
+stamp,base_tx,base_ty,base_tz,base_qx,base_qy,base_qz,base_qw,cube_tx,cube_ty,cube_tz,cube_qx,cube_qy,cube_qz,cube_qw,n_obs,inliers,dropped_faces

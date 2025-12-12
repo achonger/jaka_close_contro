@@ -114,5 +114,6 @@
     <param name="linear_acc_mm_s2" value="200.0" />
     <param name="wait_before_sample_sec" value="5.0" />
     <param name="wait_after_sample_sec"  value="2.0" />
+    <param name="sample_duration_sec" value="2.0" />
   </node>
 </launch>

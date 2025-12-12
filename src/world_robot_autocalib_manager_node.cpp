@@ -8,11 +8,13 @@
 
 #include <jaka_close_contro/WorldRobotCollectSample.h>
 #include <jaka_close_contro/WorldRobotCalibration.h>
+#include <jaka_close_contro/CubeFusionStats.h>
 
 #include <string>
 #include <vector>
 #include <cmath>
 #include <fstream>
+#include <iostream>
 
 class WorldRobotAutocalibManager
 {
@@ -24,7 +26,9 @@ public:
     pnh_.param<std::string>("camera_frame", camera_frame_, std::string("zed2i_left_camera_optical_frame"));
     pnh_.param<std::string>("cube_frame", cube_frame_, std::string("cube_center"));
     pnh_.param<std::string>("robot_base_frame", robot_base_frame_, std::string("Link_0"));
+    pnh_.param<std::string>("tool_frame", tool_frame_, tool_frame_);
     pnh_.param<std::string>("cube_topic", cube_topic_, std::string("/cube_center_fused"));
+    pnh_.param<std::string>("fusion_stats_topic", stats_topic_, stats_topic_);
 
     pnh_.param<double>("min_translation", min_translation_, 0.05);
     pnh_.param<double>("min_angle_deg", min_angle_deg_, 15.0);
@@ -33,16 +37,21 @@ public:
 
     const std::string default_yaml = ros::package::getPath("jaka_close_contro") + "/config/world_robot_extrinsic.yaml";
     pnh_.param<std::string>("extrinsic_yaml", extrinsic_yaml_, default_yaml);
+    const std::string default_joint_csv = ros::package::getPath("jaka_close_contro") + "/config/joint_calib_samples.csv";
+    pnh_.param<std::string>("joint_sample_csv", joint_sample_csv_, default_joint_csv);
 
     collect_client_ = nh_.serviceClient<jaka_close_contro::WorldRobotCollectSample>("/collect_world_robot_sample");
     solve_client_ = nh_.serviceClient<jaka_close_contro::WorldRobotCalibration>("/solve_world_robot_calibration");
 
     cube_sub_ = nh_.subscribe(cube_topic_, 1, &WorldRobotAutocalibManager::cubeCallback, this);
+    stats_sub_ = nh_.subscribe(stats_topic_, 1, &WorldRobotAutocalibManager::statsCallback, this);
     timer_ = nh_.createTimer(ros::Duration(0.1), &WorldRobotAutocalibManager::timerCallback, this);
 
     ROS_INFO("[AutoCalib] 自动世界-机器人标定管理器启动：world=%s, base=%s, cube=%s, camera=%s", world_frame_.c_str(), robot_base_frame_.c_str(), cube_frame_.c_str(), camera_frame_.c_str());
     ROS_INFO("[AutoCalib] 阈值：Δp >= %.3f m 或 Δθ >= %.1f 度 触发采样，目标样本数=%d", min_translation_, min_angle_deg_, min_samples_);
-    ROS_INFO("[AutoCalib] cube_topic=%s, extrinsic_yaml=%s", cube_topic_.c_str(), extrinsic_yaml_.c_str());
+    ROS_INFO("[AutoCalib] cube_topic=%s, stats_topic=%s, extrinsic_yaml=%s", cube_topic_.c_str(), stats_topic_.c_str(),
+             extrinsic_yaml_.c_str());
+    ROS_INFO("[AutoCalib] 联合标定样本 CSV: %s", joint_sample_csv_.c_str());
   }
 
 private:
@@ -54,10 +63,14 @@ private:
   ros::ServiceClient collect_client_;
   ros::ServiceClient solve_client_;
   ros::Subscriber cube_sub_;
+  ros::Subscriber stats_sub_;
   ros::Timer timer_;
 
   geometry_msgs::PoseStamped latest_cube_cam_;
   bool has_cube_pose_ = false;
+
+  jaka_close_contro::CubeFusionStats latest_stats_;
+  bool has_stats_ = false;
 
   geometry_msgs::PoseStamped last_sample_world_;
   bool has_last_sample_world_ = false;
@@ -69,7 +82,11 @@ private:
   std::string camera_frame_;
   std::string cube_frame_;
   std::string robot_base_frame_;
+  std::string tool_frame_ = "Link_6";
   std::string cube_topic_;
+  std::string stats_topic_ = "/cube_fusion_stats";
+  std::string joint_sample_csv_;
+  bool csv_initialized_ = false;
   double min_translation_ = 0.05;
   double min_angle_deg_ = 15.0;
   int min_samples_ = 16;
@@ -82,6 +99,12 @@ private:
     has_cube_pose_ = true;
   }
 
+  void statsCallback(const jaka_close_contro::CubeFusionStats::ConstPtr &msg)
+  {
+    latest_stats_ = *msg;
+    has_stats_ = true;
+  }
+
   void timerCallback(const ros::TimerEvent &)
   {
     if (solved_)
@@ -90,6 +113,11 @@ private:
     }
 
     if (!has_cube_pose_)
+    {
+      return;
+    }
+
+    if (!has_stats_ || !latest_stats_.valid || latest_stats_.inliers < 1)
     {
       return;
     }
@@ -182,6 +210,21 @@ private:
     has_last_sample_world_ = true;
     last_sample_world_ = cube_world;
 
+    // 记录联合标定样本
+    geometry_msgs::TransformStamped T_base_tool;
+    try
+    {
+      T_base_tool = tf_buffer_.lookupTransform(robot_base_frame_, tool_frame_, ros::Time(0));
+    }
+    catch (const tf2::TransformException &ex)
+    {
+      ROS_WARN_THROTTLE(1.0, "[AutoCalib] 无法获取 %s->%s TF：%s", robot_base_frame_.c_str(), tool_frame_.c_str(), ex.what());
+    }
+    if (!latest_cube_cam_.header.frame_id.empty() && has_stats_ && latest_stats_.valid && latest_stats_.inliers > 0)
+    {
+      appendCsvSample(latest_cube_cam_, T_base_tool, latest_stats_);
+    }
+
     ROS_INFO_STREAM("[AutoCalib] 采样成功 #" << sample_count_
                     << "\n  world_cube_meas.pos  = (" << srv.response.world_cube_pos_x << ", "
                     << srv.response.world_cube_pos_y << ", " << srv.response.world_cube_pos_z << ")"
@@ -211,6 +254,52 @@ private:
     {
       return fallback;
     }
+  }
+
+  void appendCsvSample(const geometry_msgs::PoseStamped &cube_cam,
+                       const geometry_msgs::TransformStamped &base_tool,
+                       const jaka_close_contro::CubeFusionStats &stats)
+  {
+    if (base_tool.header.frame_id.empty())
+    {
+      ROS_WARN_THROTTLE(2.0, "[AutoCalib] 未获取到 base->tool TF，跳过 CSV 记录");
+      return;
+    }
+
+    std::ofstream fout;
+    fout.setf(std::ios::fixed);
+    fout.precision(6);
+    if (!csv_initialized_)
+    {
+      fout.open(joint_sample_csv_, std::ios::out | std::ios::trunc);
+      fout << "stamp,base_tx,base_ty,base_tz,base_qx,base_qy,base_qz,base_qw,cube_tx,cube_ty,cube_tz,cube_qx,cube_qy,cube_qz,cube_qw,n_obs,inliers,dropped_faces\n";
+      csv_initialized_ = true;
+    }
+    else
+    {
+      fout.open(joint_sample_csv_, std::ios::out | std::ios::app);
+    }
+
+    tf2::Transform T_bt;
+    tf2::fromMsg(base_tool.transform, T_bt);
+    tf2::Vector3 tb = T_bt.getOrigin();
+    tf2::Quaternion qb = T_bt.getRotation();
+    qb.normalize();
+
+    tf2::Transform T_ct;
+    tf2::fromMsg(cube_cam.pose, T_ct);
+    tf2::Vector3 tc = T_ct.getOrigin();
+    tf2::Quaternion qc = T_ct.getRotation();
+    qc.normalize();
+
+    fout << cube_cam.header.stamp.toSec() << ","
+         << tb.x() << "," << tb.y() << "," << tb.z() << ","
+         << qb.x() << "," << qb.y() << "," << qb.z() << "," << qb.w() << ","
+         << tc.x() << "," << tc.y() << "," << tc.z() << ","
+         << qc.x() << "," << qc.y() << "," << qc.z() << "," << qc.w() << ","
+         << stats.n_obs << "," << stats.inliers << "," << stats.dropped_faces << "\n";
+
+    fout.close();
   }
 
   void callSolve()

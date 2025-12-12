@@ -17,6 +17,7 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   fiducial_msgs
   zed_wrapper
+  std_msgs
   jaka_msgs
   jaka_sdk_driver
   std_srvs
@@ -26,6 +27,10 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
+
+add_message_files(FILES
+  CubeFusionStats.msg
+)
 
 add_service_files(FILES
   WorldRobotCalibration.srv
@@ -50,6 +55,7 @@ catkin_package(
     cv_bridge
     fiducial_msgs
     zed_wrapper
+    std_msgs
     jaka_msgs
     jaka_sdk_driver
     std_srvs
@@ -92,6 +98,7 @@ target_link_libraries(cube_multi_face_fusion_node
   ${OpenCV_LIBS}
   ${YAML_CPP_LIBRARIES}
 )
+add_dependencies(cube_multi_face_fusion_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 
 

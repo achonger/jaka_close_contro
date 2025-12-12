@@ -14,6 +14,7 @@
 
 #include <jaka_close_contro/WorldRobotCalibration.h>
 #include <jaka_close_contro/WorldRobotCollectSample.h>
+#include <jaka_close_contro/CubeFusionStats.h>
 
 class WorldRobotCalibrationNode
 {
@@ -27,6 +28,7 @@ public:
     pnh.param<std::string>("camera_frame", camera_frame_, std::string("zed2i_left_camera_optical_frame"));
     pnh.param<std::string>("cube_frame", cube_frame_, std::string("cube_center"));
     pnh.param<std::string>("cube_topic", cube_topic_, std::string("/cube_center_fused"));
+    pnh.param<std::string>("fusion_stats_topic", stats_topic_, std::string("/cube_fusion_stats"));
     pnh.param<int>("min_samples", min_samples_, 10);
     pnh.param<bool>("publish_tf", publish_tf_, false);
 
@@ -46,6 +48,7 @@ public:
     pnh.param<std::string>("output_yaml", output_yaml_path_, default_output);
 
     cube_sub_ = nh.subscribe(cube_topic_, 1, &WorldRobotCalibrationNode::cubeCallback, this);
+    stats_sub_ = nh.subscribe(stats_topic_, 1, &WorldRobotCalibrationNode::statsCallback, this);
     collect_srv_ = nh.advertiseService("/collect_world_robot_sample", &WorldRobotCalibrationNode::collectSample, this);
     solve_srv_ = nh.advertiseService("/solve_world_robot_calibration", &WorldRobotCalibrationNode::solveCalibration, this);
 
@@ -99,6 +102,11 @@ private:
   geometry_msgs::PoseStamped latest_cube_pose_;
   bool has_cube_pose_ = false;
 
+  jaka_close_contro::CubeFusionStats latest_stats_;
+  bool has_stats_ = false;
+
+  ros::Subscriber stats_sub_;
+
   std::vector<Eigen::Vector3d> base_cube_positions_;
   std::vector<Eigen::Quaterniond> base_cube_rotations_;
   std::vector<Eigen::Vector3d> world_cube_positions_;
@@ -110,6 +118,7 @@ private:
   std::string camera_frame_;
   std::string cube_frame_;
   std::string cube_topic_;
+  std::string stats_topic_;
   std::string output_yaml_path_;
   int min_samples_ = 10;
   bool publish_tf_ = false;
@@ -143,6 +152,12 @@ private:
                                    << "  quat = (" << q_w.x() << ", " << q_w.y() << ", " << q_w.z() << ", " << q_w.w() << ")");
   }
 
+  void statsCallback(const jaka_close_contro::CubeFusionStats::ConstPtr &msg)
+  {
+    latest_stats_ = *msg;
+    has_stats_ = true;
+  }
+
   bool collectSample(jaka_close_contro::WorldRobotCollectSample::Request &,
                      jaka_close_contro::WorldRobotCollectSample::Response &res)
   {
@@ -151,6 +166,14 @@ private:
       res.success = false;
       res.message = "尚未接收到立方体融合位姿";
       ROS_WARN("[WorldRobot] 未收到 /cube_center_fused，无法采样");
+      return true;
+    }
+
+    if (!has_stats_ || !latest_stats_.valid || latest_stats_.inliers < 1)
+    {
+      res.success = false;
+      res.message = "融合无效或内点不足，跳过采样";
+      ROS_WARN("[WorldRobot] 融合状态无效(valid=%s, inliers=%d)，本次不采样", has_stats_ ? (latest_stats_.valid ? "true" : "false") : "unset", latest_stats_.inliers);
       return true;
     }
 

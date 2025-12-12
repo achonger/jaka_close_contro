@@ -10,6 +10,8 @@
 #include <tf2_ros/transform_listener.h>
 #include <yaml-cpp/yaml.h>
 
+#include <jaka_close_contro/CubeFusionStats.h>
+
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <Eigen/Dense>
@@ -22,6 +24,7 @@
 #include <string>
 #include <sstream>
 #include <vector>
+#include <limits>
 
 struct Observation
 {
@@ -82,6 +85,7 @@ public:
     sub_ = nh_.subscribe<fiducial_msgs::FiducialTransformArray>(
         fiducial_topic_, 1, &CubeMultiFaceFusion::callback, this);
     pub_ = nh_.advertise<geometry_msgs::PoseStamped>("cube_center_fused", 1);
+    stats_pub_ = nh_.advertise<jaka_close_contro::CubeFusionStats>("cube_fusion_stats", 1);
   }
 
 private:
@@ -228,6 +232,21 @@ private:
     if (obs.empty())
       return result;
 
+    auto selectBestObs = [&](const Eigen::Quaterniond &q_ref) -> size_t {
+      size_t best = 0;
+      double best_ang = std::numeric_limits<double>::infinity();
+      for (size_t i = 0; i < obs.size(); ++i)
+      {
+        double ang = quaternionAngularDistanceRad(q_ref, obs[i].q);
+        if (ang < best_ang)
+        {
+          best_ang = ang;
+          best = i;
+        }
+      }
+      return best;
+    };
+
     // 四元数同半球：参考上一帧或第一个观测
     Eigen::Quaterniond q_ref;
     if (has_prev_)
@@ -259,6 +278,27 @@ private:
     const double gate_ang_single = gate_ang_single_deg_ * M_PI / 180.0;
     const double gate_ang_multi = gate_ang_multi_deg_ * M_PI / 180.0;
 
+    // 先依据上一帧姿态做一致性筛选（抑制翻转）
+    if (has_prev_)
+    {
+      tf2::Quaternion prev_q_tf = prev_.getRotation();
+      prev_q_tf.normalize();
+      Eigen::Quaterniond q_prev(prev_q_tf.w(), prev_q_tf.x(), prev_q_tf.y(), prev_q_tf.z());
+      for (size_t i = 0; i < obs.size(); ++i)
+      {
+        double ang_prev = quaternionAngularDistanceRad(q_prev, obs[i].q);
+        if (ang_prev > gate_ang_single)
+        {
+          weights[i] = 0.0;
+          result.dropped_faces.push_back(obs[i].face_id);
+          std::ostringstream oss;
+          oss << "face=" << obs[i].face_id << ", ang_prev=" << (ang_prev * 180.0 / M_PI)
+              << " deg (prev gate)";
+          result.drop_logs.push_back(oss.str());
+        }
+      }
+    }
+
     for (int iter = 0; iter < 2; ++iter)
     {
       double sum_w = 0.0;
@@ -273,7 +313,12 @@ private:
 
       if (sum_w <= 1e-9)
       {
-        ROS_WARN("[Fusion] All observations dropped (zero weight)");
+        // 退化：全部被 gate，选择与参考最接近的单面作为结果
+        size_t best = selectBestObs(q_ref);
+        result.T = toTf2(obs[best].t, obs[best].q);
+        result.inliers = 1;
+        result.valid = (result.inliers >= static_cast<size_t>(min_inliers_));
+        result.drop_logs.push_back("All obs gated, fallback to best single");
         return result;
       }
 
@@ -323,7 +368,11 @@ private:
 
     if (sum_w <= 1e-9)
     {
-      ROS_WARN("[Fusion] All observations rejected after robust weighting");
+      size_t best = selectBestObs(q_ref);
+      result.T = toTf2(obs[best].t, obs[best].q);
+      result.inliers = 1;
+      result.valid = (result.inliers >= static_cast<size_t>(min_inliers_));
+      result.drop_logs.push_back("All obs rejected after weighting, fallback to best single");
       return result;
     }
 
@@ -456,10 +505,46 @@ private:
     }
 
     FuseResult fused = robustFuseSE3(obs);
+
+    auto publishStats = [&](const tf2::Transform &T_use) {
+      jaka_close_contro::CubeFusionStats stats_msg;
+      stats_msg.valid = fused.valid;
+      stats_msg.n_obs = static_cast<int32_t>(obs.size());
+      stats_msg.inliers = static_cast<int32_t>(fused.inliers);
+      if (!fused.dropped_faces.empty())
+      {
+        std::ostringstream oss;
+        for (size_t i = 0; i < fused.dropped_faces.size(); ++i)
+        {
+          if (i)
+            oss << ",";
+          oss << fused.dropped_faces[i];
+        }
+        stats_msg.dropped_faces = oss.str();
+      }
+
+      tf2::Vector3 t_f = T_use.getOrigin();
+      tf2::Quaternion q_f = T_use.getRotation();
+      q_f.normalize();
+      Eigen::Quaterniond qf(q_f.w(), q_f.x(), q_f.y(), q_f.z());
+      Eigen::Vector3d tf_v(t_f.x(), t_f.y(), t_f.z());
+
+      for (const auto &o : obs)
+      {
+        stats_msg.pos_err_m.push_back(static_cast<float>((o.t - tf_v).norm()));
+        double ang = quaternionAngularDistanceRad(qf, o.q) * 180.0 / M_PI;
+        stats_msg.ang_err_deg.push_back(static_cast<float>(ang));
+      }
+
+      stats_pub_.publish(stats_msg);
+    };
+
     if (!fused.valid)
     {
       ROS_WARN("[Fusion] HOLD_LAST_GOOD: no valid inliers (n_obs=%zu, dropped=%zu)",
                obs.size(), fused.dropped_faces.size());
+      tf2::Transform use_tf = has_prev_ ? prev_ : fused.T;
+      publishStats(use_tf);
       if (has_prev_)
       {
         publish(prev_, msg->header.stamp, msg->header.frame_id.empty() ? camera_frame_default_ : msg->header.frame_id);
@@ -486,6 +571,8 @@ private:
     T_out.setRotation(q_curr);
     prev_cube_q_ = q_curr;
     has_prev_q_ = true;
+
+    publishStats(T_out);
 
     ROS_INFO("[Fusion] obs=%zu, inliers=%zu, dropped=%zu", obs.size(), fused.inliers, fused.dropped_faces.size());
     for (const auto &log : fused.drop_logs)
@@ -535,6 +622,7 @@ private:
   ros::NodeHandle nh_, pnh_;
   ros::Subscriber sub_;
   ros::Publisher pub_;
+  ros::Publisher stats_pub_;
   tf2_ros::TransformBroadcaster tf_broadcaster_;
 
   tf2_ros::Buffer tf_buffer_;
