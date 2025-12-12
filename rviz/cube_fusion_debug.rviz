@@ -1,0 +1,76 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz/TF
+      Enabled: true
+      Frame Timeout: 15
+      Marker Scale: 0.5
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+    - Class: rviz/Pose
+      Enabled: true
+      Name: cube_center_fused
+      Topic: /cube_center_fused
+      Color: 0;255;0
+      Arrow Length: 0.15
+      Axes Length: 0.1
+      Axes Radius: 0.01
+    - Class: rviz/Pose
+      Enabled: true
+      Name: cube_center_pred_face
+      Topic: /cube_center_pred/face_10
+      Color: 255;0;0
+      Arrow Length: 0.15
+      Axes Length: 0.1
+      Axes Radius: 0.01
+    - Class: rviz/Pose
+      Enabled: true
+      Name: cube_center_pred_face_11
+      Topic: /cube_center_pred/face_11
+      Color: 255;128;0
+      Arrow Length: 0.15
+      Axes Length: 0.1
+      Axes Radius: 0.01
+    - Class: rviz/Pose
+      Enabled: true
+      Name: cube_center_pred_face_12
+      Topic: /cube_center_pred/face_12
+      Color: 0;0;255
+      Arrow Length: 0.15
+      Axes Length: 0.1
+      Axes Radius: 0.01
+    - Class: rviz/Pose
+      Enabled: true
+      Name: cube_center_pred_face_13
+      Topic: /cube_center_pred/face_13
+      Color: 128;0;255
+      Arrow Length: 0.15
+      Axes Length: 0.1
+      Axes Radius: 0.01
+  Enabled: true
+  Global Options:
+    Background Color: 48;48;48
+    Fixed Frame: zed2i_left_camera_optical_frame
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 1.5
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Pitch: 0.5
+      Yaw: 0.5
+      Name: Orbit

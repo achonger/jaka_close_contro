@@ -10,6 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   sensor_msgs
   geometry_msgs
+  message_filters
   tf2
   tf2_ros
   tf2_geometry_msgs
@@ -40,12 +41,13 @@ generate_messages(
 
 catkin_package(
   CATKIN_DEPENDS
-    roscpp
-    sensor_msgs
-    geometry_msgs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
+  roscpp
+  sensor_msgs
+  geometry_msgs
+  message_filters
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
     cv_bridge
     fiducial_msgs
     zed_wrapper
@@ -150,7 +152,22 @@ target_link_libraries(jaka_state_adapter_node
 )
 add_dependencies(jaka_state_adapter_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
+# 10. 融合几何自检与标定对比工具
+add_executable(cube_fusion_debug_node src/cube_fusion_debug_node.cpp)
+target_link_libraries(cube_fusion_debug_node
+  ${catkin_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
+)
+add_dependencies(cube_fusion_debug_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+add_executable(cube_nominal_compare_node src/cube_nominal_compare_node.cpp)
+target_link_libraries(cube_nominal_compare_node
+  ${catkin_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
+)
+add_dependencies(cube_nominal_compare_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
 # 安装配置文件
-install(DIRECTORY launch config
+install(DIRECTORY launch config rviz
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )

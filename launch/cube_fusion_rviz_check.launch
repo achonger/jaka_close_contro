@@ -1,0 +1,71 @@
+<launch>
+  <!-- 实验2：仅启动相机+ArUco+融合，并自动打开 RViz 查看几何一致性 -->
+
+  <arg name="svo_file" default="" />
+  <arg name="faces_yaml" default="$(find jaka_close_contro)/config/cube_faces_current.yaml" />
+  <arg name="use_debug_node" default="true" />
+
+  <!-- 1. ZED2i 相机 -->
+  <include file="$(find zed_wrapper)/launch/zed2i.launch">
+    <arg name="svo_file" value="$(arg svo_file)" />
+  </include>
+
+  <!-- 2. ArUco 检测与分流 -->
+  <node pkg="jaka_close_contro" type="cube_aruco_detector_node" name="cube_aruco_detector" output="screen">
+    <param name="image_topic"       value="/zed2i/zed_node/left/image_rect_color" />
+    <param name="camera_info_topic" value="/zed2i/zed_node/left/camera_info" />
+    <param name="fiducial_topic"    value="/fiducial_transforms" />
+    <param name="default_marker_size" value="0.04" />
+    <rosparam param="marker_sizes">
+      "0": 0.08
+      "10": 0.04
+      "11": 0.04
+      "12": 0.04
+      "13": 0.04
+    </rosparam>
+  </node>
+
+  <node pkg="jaka_close_contro" type="fiducial_relay_node" name="fiducial_relay" output="screen">
+    <param name="world_id" value="0" />
+    <rosparam param="tool_ids">["10", "11", "12", "13"]</rosparam>
+    <param name="input_topic" value="/fiducial_transforms" />
+    <param name="world_topic" value="/world_fiducials" />
+    <param name="tool_topic" value="/tool_fiducials" />
+  </node>
+
+  <!-- 3. 世界坐标系定义（提供 world->camera 供 RViz 使用） -->
+  <node pkg="jaka_close_contro" type="world_tag_node" name="world_tag_node" output="screen">
+    <param name="world_fiducial_id" value="0" />
+    <param name="fiducial_topic"    value="/world_fiducials" />
+    <param name="world_frame"       value="world" />
+    <param name="camera_frame"      value="zed2i_left_camera_optical_frame" />
+    <param name="alpha_pos"         value="0.3" />
+    <param name="alpha_rot"         value="0.3" />
+  </node>
+
+  <!-- 4. 多面融合 -->
+  <node pkg="jaka_close_contro" type="cube_multi_face_fusion_node" name="cube_multi_face_fusion" output="screen">
+    <param name="faces_yaml"           value="$(arg faces_yaml)" />
+    <param name="fiducial_topic"       value="/tool_fiducials" />
+    <param name="cube_frame"           value="cube_center" />
+    <param name="camera_frame_default" value="zed2i_left_camera_optical_frame" />
+    <param name="alpha_pos"            value="0.3" />
+    <param name="alpha_rot"            value="0.3" />
+    <param name="max_step_pos"         value="0.03" />
+    <param name="max_step_deg"         value="15.0" />
+    <param name="timeout_sec"          value="0.5" />
+    <param name="publish_tool_tf"      value="false" />
+  </node>
+
+  <!-- 5. 可选：逐面 vs 融合误差输出 -->
+  <node if="$(arg use_debug_node)" pkg="jaka_close_contro" type="cube_fusion_debug_node" name="cube_fusion_debug" output="screen">
+    <param name="faces_yaml"      value="$(arg faces_yaml)" />
+    <param name="fiducial_topic"  value="/tool_fiducials" />
+    <param name="fused_topic"     value="/cube_center_fused" />
+    <param name="cube_frame"      value="cube_center" />
+    <param name="publish_predicted_pose" value="true" />
+  </node>
+
+  <!-- 6. 打开 RViz，自动加载显示配置 -->
+  <node pkg="rviz" type="rviz" name="rviz" output="screen" args="-d $(find jaka_close_contro)/rviz/cube_fusion_debug.rviz" />
+</launch>

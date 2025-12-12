@@ -42,8 +42,8 @@
    ```
    - 启动内容：驱动 + TF、ZED2i 相机、Aruco 检测/分流、世界板滤波、多面融合、世界-机器人标定节点、自动采样管理节点、自动标定轨迹执行节点。
    - 轨迹文件使用 `config/jaka1_world_robot_calibration_pose.csv`，字段为 `name,x_mm,y_mm,z_mm,rx_deg,ry_deg,rz_deg`，单位分别为 mm / deg（基座坐标系下的 TCP 位姿）。
-   - `world_robot_calib_motion_node` 通过 `/jaka_driver/linear_move` 调用官方驱动的笛卡尔直线运动接口，默认速度倍率 15%，线速度 80 mm/s、线加速度 200 mm/s²， 每个姿态保持 1 s 方便采样。
-2. 节点会按 CSV 顺序依次发送目标 TCP 位姿，运动过程中自动判断位姿变化并调用 `/collect_world_robot_sample`。
+   - `world_robot_calib_motion_node` 通过 `/jaka_driver/linear_move` 调用官方驱动的笛卡尔直线运动接口，默认速度倍率 15%，线速度 80 mm/s、线加速度 200 mm/s²。到达每个姿态后自动**等待 5 s（采样前）+ 触发采样 + 再等待 2 s**，确保视觉稳定再切换下一个点。
+2. 节点会按 CSV 顺序依次发送目标 TCP 位姿，运动过程中自动判断位姿变化并调用 `/collect_world_robot_sample`（或由自动管理节点触发）。
 3. 样本数量达到 `min_samples`（默认 16）后，管理节点自动调用 `/solve_world_robot_calibration`，在终端打印残差统计并写入 `config/world_robot_extrinsic.yaml`。
 4. 标定完成后即可直接切换到闭环观察/控制（`world_robot_closedloop.launch`），无需再次求解外参。
 
@@ -102,6 +102,25 @@
 - 建议采集时覆盖足够多姿态与空间分布，提升拟合稳定性。
 - 标定结果保存在 YAML 中，重启后无需重新标定（除非硬件装配变化）。
 
+## 融合与外参自检实验工具
+
+为快速验证几何与外参质量，提供三组可复现实验：
+
+1. **逐面反推 vs 融合残差（cube_fusion_debug）**
+   - 启动：`roslaunch jaka_close_contro cube_fusion_debug.launch`
+   - 功能：逐个 tag 反算 `camera->cube_center` 并与融合结果对比，输出每面误差与 mean/rms/max，支持 CSV。
+   - 通过阈值（静止场景）：`max(pos_err) < 0.01 m` 且 `max(ang_err) < 5 deg`。若出现 0.02~0.03 m 或 10~20 deg 需检查 faces_yaml 或坐标约定。
+2. **RViz 几何一致性检查**
+   - 启动：`roslaunch jaka_close_contro cube_fusion_rviz_check.launch`
+   - 内容：仅启动相机 + ArUco + 世界板 + 融合（可选 debug 节点），自动加载 `rviz/cube_fusion_debug.rviz` 查看 `cube_center` 与各面预测位置。
+   - 判定：肉眼观察 `cube_center` 是否落在立方体中心附近、不会穿出立方体或明显偏离。
+3. **机器人理论 cube vs 视觉 cube 残差（cube_nominal_compare）**
+   - 启动：`roslaunch jaka_close_contro cube_nominal_compare.launch`
+   - 逻辑：用 TF 查询 `base->tool`，结合 `tool_to_cube`（支持平移+旋转）得到理论 `base->cube`，与视觉 `base->cube` 对比，输出 pos/ang 的 mean/rms/max，可写 CSV，发布 `/cube_center_nominal` 供 RViz。
+   - 预期：静止时 pos_err 约毫米~1cm 量级，ang_err 不应出现几十度系统偏差；若异常优先检查 `tool_to_cube` 旋转或 faces_yaml 坐标定义。
+
+`tool_to_cube` 约定：如果立方体中心位于工具 +Z 方向 0.077 m，则 `T_tool_cube.tz = +0.077`，`T_cube_tool.tz = -0.077`；不要混用两者方向。
+
 ## 文件结构
 
 ```
@@ -109,6 +128,9 @@
 │   ├── world_robot_calibration.launch   # 一键世界-机器人标定
 │   ├── world_robot_closedloop.launch    # 一键闭环观察/控制
 │   ├── world_robot_autocalib_motion.launch # 自动轨迹 + 自动采样标定
+│   ├── cube_fusion_debug.launch         # 实验1：逐面 vs 融合残差
+│   ├── cube_fusion_rviz_check.launch    # 实验2：RViz 几何检查
+│   ├── cube_nominal_compare.launch      # 实验3：机器人几何 vs 视觉残差
 │   ├── world_robot_selfcheck.launch     # 仅自检视觉/外参 TF 链
 │   ├── hand_eye_calibration.launch      # 兼容入口，内部直接 include 新标定
 │   ├── closed_loop_system.launch        # 示例系统启动，已移除旧手眼节点
@@ -123,6 +145,8 @@
 │   ├── world_robot_calib_motion_node.cpp
 │   ├── world_robot_extrinsic_broadcaster_node.cpp
 │   ├── cube_world_closedloop_node.cpp
+│   ├── cube_fusion_debug_node.cpp
+│   ├── cube_nominal_compare_node.cpp
 │   └── closed_loop_control_node.cpp
 ├── srv/
 │   └── WorldRobotCalibration.srv
@@ -130,6 +154,8 @@
 │   ├── cube_faces_current.yaml
 │   ├── cube_faces_ideal.yaml
 │   └── jaka1_world_robot_calibration_pose.csv   # arm1 标定轨迹（可扩展 arm2/arm3/arm4）
+├── rviz/
+│   └── cube_fusion_debug.rviz                   # RViz 默认视角，用于检查融合几何
 └── urdf/
     └── jaka_zu3.urdf
 ```
