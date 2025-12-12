@@ -26,7 +26,6 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
-find_package(Ceres REQUIRED)
 
 add_service_files(FILES
   WorldRobotCalibration.srv
@@ -65,7 +64,6 @@ include_directories(
   ${EIGEN3_INCLUDE_DIR}
   ${OpenCV_INCLUDE_DIRS}
   ${YAML_CPP_INCLUDE_DIR}
-  ${CERES_INCLUDE_DIRS}
 )
 
 # 1. 多尺寸 ArUco 检测器
@@ -93,9 +91,6 @@ target_link_libraries(cube_multi_face_fusion_node
   ${catkin_LIBRARIES}
   ${OpenCV_LIBS}
   ${YAML_CPP_LIBRARIES}
-  ${CERES_LIBRARIES}
-  glog
-  gflags
 )
 
 
