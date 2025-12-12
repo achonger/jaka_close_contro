@@ -2,12 +2,15 @@
 #include <ros/package.h>
 #include <jaka_msgs/Move.h>
 #include <jaka_close_contro/WorldRobotCollectSample.h>
+#include <sensor_msgs/JointState.h>
 
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
 #include <cmath>
+#include <mutex>
+#include <algorithm>
 
 struct CalibPoseRow
 {
@@ -35,6 +38,10 @@ public:
     pnh.param<double>("joint_speed_scale", speed_scale_, speed_scale_);
     pnh.param<double>("linear_speed_mm_s", linear_speed_mm_s_, 80.0);
     pnh.param<double>("linear_acc_mm_s2", linear_acc_mm_s2_, 200.0);
+    pnh.param<double>("motion_done_timeout_sec", motion_done_timeout_sec_, 120.0);
+    pnh.param<double>("motion_stable_duration_sec", motion_stable_duration_sec_, 0.5);
+    pnh.param<double>("motion_joint_threshold_rad", motion_joint_threshold_rad_, 0.002);
+    pnh.param<std::string>("joint_state_topic", joint_state_topic_, std::string("/joint_states"));
 
     const bool has_wait_before = pnh.getParam("wait_before_sample_sec", wait_before_sample_sec_);
     const bool has_wait_after = pnh.getParam("wait_after_sample_sec", wait_after_sample_sec_);
@@ -62,6 +69,7 @@ public:
 
     linear_move_client_ = nh_.serviceClient<jaka_msgs::Move>(linear_move_service_);
     collect_sample_client_ = nh_.serviceClient<jaka_close_contro::WorldRobotCollectSample>(collect_sample_service_);
+    joint_state_sub_ = nh_.subscribe(joint_state_topic_, 50, &WorldRobotCalibMotionNode::jointStateCallback, this);
 
     if (!loadCalibPoses())
     {
@@ -73,6 +81,8 @@ public:
     ROS_INFO("[CalibMotion] 臂标识=%s, 标定姿态数: %zu", arm_name_.c_str(), poses_.size());
     ROS_INFO("[CalibMotion] 速度缩放=%.2f, 线速度=%.1f mm/s, 线加速度=%.1f mm/s^2", speed_scale_,
              linear_speed_mm_s_, linear_acc_mm_s2_);
+    ROS_INFO("[CalibMotion] 等待停止阈值：关节Δ=%.4f rad，稳定时间=%.2f s，超时=%.1f s", motion_joint_threshold_rad_,
+             motion_stable_duration_sec_, motion_done_timeout_sec_);
     ROS_INFO("[CalibMotion] 到位等待：采样前 %.2f s，采样后 %.2f s", wait_before_sample_sec_, wait_after_sample_sec_);
     ROS_INFO("[CalibMotion] CSV 文件: %s", calib_pose_csv_.c_str());
     ROS_INFO("[CalibMotion] linear_move 服务: %s", linear_move_service_.c_str());
@@ -91,6 +101,9 @@ private:
   double speed_scale_ = 0.15;
   double linear_speed_mm_s_ = 80.0;
   double linear_acc_mm_s2_ = 200.0;
+  double motion_done_timeout_sec_ = 120.0;
+  double motion_stable_duration_sec_ = 0.5;
+  double motion_joint_threshold_rad_ = 0.002;
   double hold_time_after_reach_ = 1.0;
   double pre_sample_wait_sec_ = 5.0;  // 兼容旧参数
   double post_sample_wait_sec_ = 2.0; // 兼容旧参数
@@ -98,12 +111,19 @@ private:
   double wait_after_sample_sec_ = 2.0;
   std::string collect_sample_service_ = "/collect_world_robot_sample";
   bool trigger_sample_service_ = true;
+  std::string joint_state_topic_ = "/joint_states";
 
   std::size_t target_index_ = 0;
 
   std::vector<CalibPoseRow> poses_;
   ros::ServiceClient linear_move_client_;
   ros::ServiceClient collect_sample_client_;
+  ros::Subscriber joint_state_sub_;
+  std::vector<double> prev_joint_pos_;
+  ros::Time last_joint_stamp_;
+  ros::Time last_motion_time_;
+  bool has_prev_joint_ = false;
+  std::mutex joint_mutex_;
 
   void waitForService()
   {
@@ -116,6 +136,45 @@ private:
       }
       ROS_WARN("[CalibMotion] 等待 %s ...", linear_move_service_.c_str());
     }
+  }
+
+  void jointStateCallback(const sensor_msgs::JointState::ConstPtr &msg)
+  {
+    if (msg->position.size() < 6)
+    {
+      ROS_WARN_THROTTLE(5.0, "[CalibMotion] joint_state 位置元素不足6个，忽略该帧");
+      return;
+    }
+
+    const ros::Time stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
+    std::lock_guard<std::mutex> lock(joint_mutex_);
+
+    if (has_prev_joint_)
+    {
+      double max_diff = 0.0;
+      const size_t n = std::min(prev_joint_pos_.size(), msg->position.size());
+      for (size_t i = 0; i < n; ++i)
+      {
+        const double diff = std::abs(msg->position[i] - prev_joint_pos_[i]);
+        if (diff > max_diff)
+        {
+          max_diff = diff;
+        }
+      }
+
+      if (max_diff > motion_joint_threshold_rad_)
+      {
+        last_motion_time_ = stamp;
+      }
+    }
+    else
+    {
+      last_motion_time_ = stamp;
+      has_prev_joint_ = true;
+    }
+
+    prev_joint_pos_ = msg->position;
+    last_joint_stamp_ = stamp;
   }
 
   bool loadCalibPoses()
@@ -208,6 +267,61 @@ private:
     return true;
   }
 
+  bool waitRobotMotionDone(double timeout_sec)
+  {
+    const ros::Time start = ros::Time::now();
+    ros::Rate rate(20.0);
+    ros::Time stable_start;
+
+    while (ros::ok())
+    {
+      ros::spinOnce();
+
+      if ((ros::Time::now() - start).toSec() > timeout_sec)
+      {
+        ROS_WARN("[CalibMotion] 等待机器人停止运动超时（%.1f s）", timeout_sec);
+        return false;
+      }
+
+      ros::Time last_stamp;
+      ros::Time last_motion;
+      {
+        std::lock_guard<std::mutex> lock(joint_mutex_);
+        last_stamp = last_joint_stamp_;
+        last_motion = last_motion_time_;
+      }
+
+      if (last_stamp.isZero())
+      {
+        ROS_WARN_THROTTLE(2.0, "[CalibMotion] 尚未收到 joint_state，继续等待...");
+        rate.sleep();
+        continue;
+      }
+
+      const double since_motion = (ros::Time::now() - last_motion).toSec();
+      if (since_motion >= motion_stable_duration_sec_)
+      {
+        if (stable_start.isZero())
+        {
+          stable_start = ros::Time::now();
+        }
+        else if ((ros::Time::now() - stable_start).toSec() >= motion_stable_duration_sec_)
+        {
+          ROS_INFO("[CalibMotion] 检测到机器人已停止运动");
+          return true;
+        }
+      }
+      else
+      {
+        stable_start = ros::Time(0);
+      }
+
+      rate.sleep();
+    }
+
+    return false;
+  }
+
   bool triggerSample(std::size_t pose_index, const std::string &pose_name)
   {
     if (!trigger_sample_service_)
@@ -268,7 +382,14 @@ private:
         break;
       }
 
-      ROS_INFO_STREAM("[CalibMotion] [" << ros::Time::now() << "] linear_move 返回，采样前静止 "
+      ROS_INFO_STREAM("[CalibMotion] [" << ros::Time::now() << "] 已发送 linear_move，开始等待机器人运动完成");
+      if (!waitRobotMotionDone(motion_done_timeout_sec_))
+      {
+        ROS_WARN_STREAM("[CalibMotion] 等待机器人停止超时，姿态 " << p.name
+                        << " 可能尚未完全到位，仍然进入静止采样阶段");
+      }
+
+      ROS_INFO_STREAM("[CalibMotion] [" << ros::Time::now() << "] 机器人已停止，采样前静止 "
                                           << wait_before_sample_sec_ << " s");
       ros::Duration(wait_before_sample_sec_).sleep();
 

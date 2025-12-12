@@ -244,10 +244,10 @@ private:
     ROS_INFO("[AutoCalib] 外参离散度：pos RMSE=%.4f m, rot RMSE=%.3f deg", srv.response.extrinsic_pos_rmse_m,
              srv.response.extrinsic_rot_rmse_deg);
 
-    saveExtrinsic(srv.response);
+    saveExtrinsic(srv.response, sample_count_);
   }
 
-  void saveExtrinsic(const jaka_close_contro::WorldRobotCalibration::Response &res)
+  void saveExtrinsic(const jaka_close_contro::WorldRobotCalibration::Response &res, size_t sample_count)
   {
     YAML::Emitter emitter;
     emitter << YAML::BeginMap;
@@ -271,7 +271,21 @@ private:
     try
     {
       std::ofstream fout(extrinsic_yaml_);
-      fout << emitter.c_str();
+      fout.setf(std::ios::fixed);
+      fout.precision(6);
+
+      const ros::Time now = ros::Time::now();
+      fout << "# World-robot extrinsic calibration\n";
+      fout << "# Generated at: " << now << " (ROS time)\n";
+      fout << "# Samples used: " << sample_count << "\n";
+      fout << "# Residuals (measurement vs prediction):\n";
+      fout << "#   position_rmse_m      = " << res.position_rmse_m << " m\n";
+      fout << "#   orientation_rmse_deg = " << res.orientation_rmse_deg << " deg\n";
+      fout << "# Extrinsic dispersion (over calibration runs):\n";
+      fout << "#   extrinsic_pos_rmse_m  = " << res.extrinsic_pos_rmse_m << " m\n";
+      fout << "#   extrinsic_rot_rmse_deg= " << res.extrinsic_rot_rmse_deg << " deg\n\n";
+
+      fout << emitter.c_str() << std::endl;
       fout.close();
       ROS_INFO("[AutoCalib] 已写入外参文件：%s", extrinsic_yaml_.c_str());
     }
