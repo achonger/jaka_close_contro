@@ -13,6 +13,19 @@
 
 namespace
 {
+geometry_msgs::Pose transformToPoseMsg(const tf2::Transform &tf)
+{
+  geometry_msgs::Pose out;
+  const tf2::Vector3 &t = tf.getOrigin();
+  out.position.x = t.x();
+  out.position.y = t.y();
+  out.position.z = t.z();
+  tf2::Quaternion q = tf.getRotation();
+  q.normalize();
+  out.orientation = tf2::toMsg(q);
+  return out;
+}
+
 struct StatResult
 {
   double mean{0.0};
@@ -203,7 +216,7 @@ private:
       geometry_msgs::PoseStamped nominal_msg;
       nominal_msg.header.frame_id = robot_base_frame_;
       nominal_msg.header.stamp = msg->header.stamp;
-      nominal_msg.pose = tf2::toMsg(T_base_cube_nominal);
+      nominal_msg.pose = transformToPoseMsg(T_base_cube_nominal);
       nominal_pub_.publish(nominal_msg);
     }
     if (publish_vision_pose_)
@@ -211,7 +224,7 @@ private:
       geometry_msgs::PoseStamped vis_msg;
       vis_msg.header.frame_id = robot_base_frame_;
       vis_msg.header.stamp = msg->header.stamp;
-      vis_msg.pose = tf2::toMsg(T_base_cube_vision);
+      vis_msg.pose = transformToPoseMsg(T_base_cube_vision);
       vision_pub_.publish(vis_msg);
     }
 

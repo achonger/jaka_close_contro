@@ -18,6 +18,19 @@
 
 namespace
 {
+geometry_msgs::Pose transformToPoseMsg(const tf2::Transform &tf)
+{
+  geometry_msgs::Pose out;
+  const tf2::Vector3 &t = tf.getOrigin();
+  out.position.x = t.x();
+  out.position.y = t.y();
+  out.position.z = t.z();
+  tf2::Quaternion q = tf.getRotation();
+  q.normalize();
+  out.orientation = tf2::toMsg(q);
+  return out;
+}
+
 struct StatResult
 {
   double mean{0.0};
@@ -202,7 +215,7 @@ private:
         geometry_msgs::PoseStamped pose;
         pose.header.stamp = fused_msg->header.stamp;
         pose.header.frame_id = cam_frame;
-        pose.pose = tf2::toMsg(T_cam_cube_pred);
+        pose.pose = transformToPoseMsg(T_cam_cube_pred);
         pub.publish(pose);
       }
 
