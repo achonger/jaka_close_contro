@@ -12,6 +12,7 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <Eigen/Eigenvalues>
 
 #include <algorithm>
 #include <cmath>
