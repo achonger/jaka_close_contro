@@ -56,6 +56,7 @@
         name="cube_multi_face_fusion"
         output="screen">
     <param name="faces_yaml"             value="$(find jaka_close_contro)/config/cube_faces_current.yaml"/>
+    <param name="tool_offset_yaml"      value="$(find jaka_close_contro)/config/tool_offset_current.yaml"/>
     <param name="fiducial_topic"         value="/tool_fiducials"/>
     <param name="cube_frame"             value="cube_center"/>
     <param name="camera_frame_default"   value="zed2i_left_camera_optical_frame"/>

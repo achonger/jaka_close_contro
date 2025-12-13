@@ -9,6 +9,7 @@
 #include <message_filters/sync_policies/approximate_time.h>
 #include <boost/bind.hpp>
 #include <yaml-cpp/yaml.h>
+#include <ros/package.h>
 
 #include <fstream>
 #include <map>
@@ -82,7 +83,8 @@ public:
   CubeFusionDebugNode(ros::NodeHandle &nh, ros::NodeHandle &pnh)
       : nh_(nh), pnh_(pnh), sync_(SyncPolicy(10), fid_sub_, fused_sub_)
   {
-    pnh_.param<std::string>("faces_yaml", faces_yaml_path_, "");
+    const std::string default_faces_yaml = ros::package::getPath("jaka_close_contro") + "/config/cube_faces_current.yaml";
+    pnh_.param<std::string>("faces_yaml", faces_yaml_path_, default_faces_yaml);
     pnh_.param<std::string>("fiducial_topic", fiducial_topic_, std::string("/tool_fiducials"));
     pnh_.param<std::string>("fused_topic", fused_topic_, std::string("/cube_center_fused"));
     pnh_.param<std::string>("cube_frame", cube_frame_, std::string("cube_center"));

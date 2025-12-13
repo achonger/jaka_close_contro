@@ -39,6 +39,13 @@ public:
     pnh_.param<std::string>("extrinsic_yaml", extrinsic_yaml_, default_yaml);
     const std::string default_joint_csv = ros::package::getPath("jaka_close_contro") + "/config/joint_calib_samples.csv";
     pnh_.param<std::string>("joint_sample_csv", joint_sample_csv_, default_joint_csv);
+    const std::string default_cube_faces_output = ros::package::getPath("jaka_close_contro") + "/config/cube_faces_current.yaml";
+    const std::string default_tool_offset_output = ros::package::getPath("jaka_close_contro") + "/config/tool_offset_current.yaml";
+    pnh_.param<std::string>("faces_output_yaml", faces_output_yaml_, default_cube_faces_output);
+    pnh_.param<std::string>("tool_offset_output_yaml", tool_offset_output_yaml_, default_tool_offset_output);
+
+    // 重置上一轮的 CSV 记录，防止残留导致统计混淆
+    std::ofstream(joint_sample_csv_, std::ios::out | std::ios::trunc).close();
 
     collect_client_ = nh_.serviceClient<jaka_close_contro::WorldRobotCollectSample>("/collect_world_robot_sample");
     solve_client_ = nh_.serviceClient<jaka_close_contro::WorldRobotCalibration>("/solve_world_robot_calibration");
@@ -92,6 +99,9 @@ private:
   int min_samples_ = 16;
   bool auto_solve_ = true;
   std::string extrinsic_yaml_;
+  std::string faces_output_yaml_;
+  std::string tool_offset_output_yaml_;
+  jaka_close_contro::WorldRobotCalibration::Response latest_result_;
 
   void cubeCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
   {
@@ -324,6 +334,8 @@ private:
 
     solved_ = true;
 
+    latest_result_ = srv.response;
+
     ROS_INFO("[AutoCalib] 标定成功：translation = [%.3f, %.3f, %.3f], rotation(xyzw) = [%.4f, %.4f, %.4f, %.4f]",
              srv.response.translation.x, srv.response.translation.y, srv.response.translation.z,
              srv.response.rotation.x, srv.response.rotation.y, srv.response.rotation.z, srv.response.rotation.w);
@@ -382,6 +394,7 @@ private:
     {
       ROS_ERROR("[AutoCalib] 保存外参失败：%s", e.what());
     }
+
   }
 };
 

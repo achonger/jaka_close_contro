@@ -4,6 +4,8 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/transform_listener.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <yaml-cpp/yaml.h>
+#include <ros/package.h>
 
 #include <fstream>
 #include <map>
@@ -86,6 +88,9 @@ public:
     pnh_.param<bool>("publish_nominal_pose", publish_nominal_pose_, true);
     pnh_.param<bool>("publish_vision_pose", publish_vision_pose_, true);
 
+    const std::string default_tool_offset_yaml = ros::package::getPath("jaka_close_contro") + "/config/tool_offset_current.yaml";
+    pnh_.param<std::string>("tool_offset_yaml", tool_offset_yaml_path_, default_tool_offset_yaml);
+
     loadToolToCube();
 
     cube_sub_ = nh_.subscribe(cube_topic_, 1, &CubeNominalCompareNode::cubeCallback, this);
@@ -119,42 +124,37 @@ public:
 private:
   void loadToolToCube()
   {
-    std::vector<double> trans;
-    if (!pnh_.getParam("tool_to_cube_translation", trans) || trans.size() != 3)
+    try
     {
-      trans = {0.0, 0.0, 0.077};
-    }
-
-    tf2::Quaternion q;
-    std::vector<double> quat;
-    if (pnh_.getParam("tool_to_cube_quaternion", quat) && quat.size() == 4)
-    {
-      q.setX(quat[0]);
-      q.setY(quat[1]);
-      q.setZ(quat[2]);
-      q.setW(quat[3]);
-    }
-    else
-    {
-      std::vector<double> rpy_deg;
-      if (!pnh_.getParam("tool_to_cube_rpy_deg", rpy_deg) || rpy_deg.size() != 3)
+      YAML::Node root = YAML::LoadFile(tool_offset_yaml_path_);
+      if (!root["tool_offset"] || !root["tool_offset"]["translation"] || !root["tool_offset"]["rotation"])
       {
-        rpy_deg = {0.0, 0.0, 0.0};
+        throw std::runtime_error("tool_offset 缺少 translation/rotation");
       }
-      const double r = rpy_deg[0] * M_PI / 180.0;
-      const double p = rpy_deg[1] * M_PI / 180.0;
-      const double y = rpy_deg[2] * M_PI / 180.0;
-      tf2::Matrix3x3 R;
-      R.setRPY(r, p, y);
-      R.getRotation(q);
+
+      auto trans = root["tool_offset"]["translation"];
+      auto rot = root["tool_offset"]["rotation"];
+      if (trans.size() != 3 || rot.size() != 4)
+      {
+        throw std::runtime_error("tool_offset translation/rotation 尺寸不正确");
+      }
+
+      tf2::Quaternion q(rot[0].as<double>(), rot[1].as<double>(), rot[2].as<double>(), rot[3].as<double>());
+      q.normalize();
+
+      T_tool_cube_.setOrigin(tf2::Vector3(trans[0].as<double>(), trans[1].as<double>(), trans[2].as<double>()));
+      T_tool_cube_.setRotation(q);
+
+      ROS_INFO("[NominalCompare] 从 YAML 读取 T_tool_cube: trans[%.3f %.3f %.3f], quat[%.3f %.3f %.3f %.3f]",
+               trans[0].as<double>(), trans[1].as<double>(), trans[2].as<double>(), q.x(), q.y(), q.z(), q.w());
     }
-    q.normalize();
-
-    T_tool_cube_.setOrigin(tf2::Vector3(trans[0], trans[1], trans[2]));
-    T_tool_cube_.setRotation(q);
-
-    ROS_INFO("[NominalCompare] T_tool_cube: trans[%.3f %.3f %.3f], quat[%.3f %.3f %.3f %.3f]", trans[0], trans[1], trans[2],
-             q.x(), q.y(), q.z(), q.w());
+    catch (const std::exception &e)
+    {
+      tf2::Quaternion q_default(0, 0, 0, 1);
+      T_tool_cube_.setOrigin(tf2::Vector3(0.0, 0.0, 0.077));
+      T_tool_cube_.setRotation(q_default);
+      ROS_WARN("[NominalCompare] 读取 tool_offset_yaml 失败 (%s)，使用默认 [0,0,0.077]", e.what());
+    }
   }
 
   void cubeCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
@@ -268,6 +268,7 @@ private:
   std::string cube_frame_;
   std::string cube_topic_;
   std::string output_csv_;
+  std::string tool_offset_yaml_path_;
   bool publish_nominal_pose_{true};
   bool publish_vision_pose_{true};
 

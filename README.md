@@ -151,12 +151,28 @@
 ├── srv/
 │   └── WorldRobotCalibration.srv
 ├── config/
-│   ├── cube_faces_current.yaml
-│   ├── cube_faces_ideal.yaml
+│   ├── cube_faces_current.yaml                  # 当前立方体各面几何（translation + rpy_deg）
+│   ├── cube_faces_ideal.yaml                    # 理想面几何模板
+│   ├── tool_offset_current.yaml                 # Link_6 -> cube_center 工具外参
 │   └── jaka1_world_robot_calibration_pose.csv   # arm1 标定轨迹（可扩展 arm2/arm3/arm4）
 ├── rviz/
 │   └── cube_fusion_debug.rviz                   # RViz 默认视角，用于检查融合几何
 └── urdf/
     └── jaka_zu3.urdf
 ```
+
+## 源码节点说明（src/*.cpp）
+
+- **cube_aruco_detector_node.cpp**：启动 fiducial_ros 包的 ArUco 检测器，订阅相机图像与相机内参，发布 `/fiducial_transforms` 供后续分流使用。输入：彩色图像、CameraInfo；输出：`fiducial_transforms`。
+- **fiducial_relay_node.cpp**：根据 ID 将 ArUco 检测结果分流到世界板与末端立方体两路；输入：`/fiducial_transforms`；输出：`/world_fiducials`（ID0 大板）与 `/tool_fiducials`（立方体多面）。
+- **world_tag_node.cpp**：对世界板位姿进行滤波与发布，输入 `/world_fiducials`，输出平滑 TF `world -> camera`（frame 由相机光学系决定）。
+- **cube_multi_face_fusion_node.cpp**：对末端立方体多面 ArUco 进行鲁棒融合与时间滤波，输入 `/tool_fiducials`，输出 `/cube_center_fused` PoseStamped（frame 为相机光学系），并可选发布 `camera -> cube_center` TF。
+- **world_robot_calibration_node.cpp**：采集世界/机器人样本并执行 Ceres 联合标定，同时估计 `world -> base` 与 `flange -> cube_center`，提供服务 `/collect_world_robot_sample`、`/solve_world_robot_calibration`，输出 YAML 与可选 TF。
+- **world_robot_autocalib_manager_node.cpp**：管理自动采样流程与保存标定结果。输入：采样/求解服务结果，参数：CSV 模板与输出路径；输出：记录采样 CSV、更新 `config/world_robot_extrinsic.yaml`（世界→基座），联合标定节点会同步写出 `config/cube_faces_current.yaml` 与 `config/tool_offset_current.yaml`。
+- **world_robot_calib_motion_node.cpp**：按 CSV 轨迹驱动机器人做自动标定位姿，调用 `/jaka_driver/linear_move` 发送笛卡尔轨迹；输入：轨迹 CSV；输出：机器人运动和采样触发。
+- **world_robot_extrinsic_broadcaster_node.cpp**：从 YAML 读取 `world -> base` 外参并周期性广播 TF，供闭环/调试使用。
+- **cube_world_closedloop_node.cpp**：在闭环阶段计算 `base -> cube` 目标与观察值，打印或发布用于控制的位姿；输入：`world -> camera`、`world -> base` TF 与 `/cube_center_fused`。
+- **cube_fusion_debug_node.cpp**：调试多面融合质量，逐面反推 `cube_center` 与融合结果对比，输出误差统计与可选 CSV。
+- **cube_nominal_compare_node.cpp**：对比机器人理论 `base -> cube` 与视觉测量，输出 pos/ang 残差统计，并可发布 `/cube_center_nominal` 供 RViz。
+- **closed_loop_control_node.cpp**：示例闭环控制器，结合已标定外参与实时视觉，计算并调用 `/jaka_driver/joint_move` 或自定义接口实现闭环移动。
 

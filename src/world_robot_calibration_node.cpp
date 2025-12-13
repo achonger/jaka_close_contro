@@ -6,11 +6,14 @@
 #include <tf2_ros/transform_listener.h>
 #include <fstream>
 #include <vector>
+#include <map>
+#include <algorithm>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <cmath>
 #include <yaml-cpp/yaml.h>
 #include <ros/package.h>
+#include <ceres/ceres.h>
 
 #include <jaka_close_contro/WorldRobotCalibration.h>
 #include <jaka_close_contro/WorldRobotCollectSample.h>
@@ -44,8 +47,15 @@ public:
       cube_offset_ = Eigen::Vector3d(0.0, 0.0, offset_z);
     }
 
-    const std::string default_output = ros::package::getPath("jaka_close_contro") + "/config/world_robot_extrinsic.yaml";
+    const std::string base_path = ros::package::getPath("jaka_close_contro");
+    const std::string default_output = base_path + "/config/world_robot_extrinsic.yaml";
+    const std::string default_faces_output = base_path + "/config/cube_faces_current.yaml";
+    const std::string default_tool_output = base_path + "/config/tool_offset_current.yaml";
+    const std::string default_faces_input = base_path + "/config/cube_faces_ideal.yaml";
     pnh.param<std::string>("output_yaml", output_yaml_path_, default_output);
+    pnh.param<std::string>("faces_output_yaml", faces_output_yaml_path_, default_faces_output);
+    pnh.param<std::string>("tool_offset_output_yaml", tool_offset_output_yaml_path_, default_tool_output);
+    pnh.param<std::string>("faces_input_yaml", faces_input_yaml_path_, default_faces_input);
 
     cube_sub_ = nh.subscribe(cube_topic_, 1, &WorldRobotCalibrationNode::cubeCallback, this);
     stats_sub_ = nh.subscribe(stats_topic_, 1, &WorldRobotCalibrationNode::statsCallback, this);
@@ -57,8 +67,12 @@ public:
              world_frame_.c_str(), robot_base_frame_.c_str(), tool_frame_.c_str(), camera_frame_.c_str(), cube_frame_.c_str());
     ROS_INFO("[WorldRobot] 立方体偏移（法兰系）= [%.3f, %.3f, %.3f] m", cube_offset_.x(), cube_offset_.y(), cube_offset_.z());
     ROS_INFO("[WorldRobot] 输出 YAML: %s", output_yaml_path_.c_str());
+    ROS_INFO("[WorldRobot] faces_input=%s, faces_output=%s, tool_offset_output=%s", faces_input_yaml_path_.c_str(),
+             faces_output_yaml_path_.c_str(), tool_offset_output_yaml_path_.c_str());
 
     loadExistingCalibration();
+
+    loadFacesYaml();
 
     if (publish_tf_)
     {
@@ -74,6 +88,13 @@ private:
   tf2_ros::TransformListener tf_listener_;
   tf2_ros::TransformBroadcaster tf_broadcaster_;
   ros::Timer tf_timer_;
+
+  struct FaceParam
+  {
+    int id;
+    Eigen::Vector3d t;
+    Eigen::Vector3d rpy; // rad
+  };
 
   struct ResidualStats
   {
@@ -99,6 +120,97 @@ private:
     double extrinsic_rot_max_deg = 0.0;
   };
 
+  struct JointCalibResidual
+  {
+    JointCalibResidual(const Eigen::Isometry3d &T_world_cube_meas,
+                       const Eigen::Isometry3d &T_base_tool,
+                       double pos_sigma,
+                       double rot_sigma)
+        : T_world_cube_meas_(T_world_cube_meas), T_base_tool_(T_base_tool), pos_sigma_(pos_sigma), rot_sigma_(rot_sigma) {}
+
+    template <typename T>
+    bool operator()(const T *const world_base, const T *const flange_cube, T *residuals) const
+    {
+      Eigen::Map<const Eigen::Matrix<T, 3, 1>> t_wb(world_base);
+      Eigen::Quaternion<T> q_wb(world_base[6], world_base[3], world_base[4], world_base[5]);
+      q_wb.normalize();
+
+      Eigen::Map<const Eigen::Matrix<T, 3, 1>> t_fc(flange_cube);
+      Eigen::Quaternion<T> q_fc(flange_cube[6], flange_cube[3], flange_cube[4], flange_cube[5]);
+      q_fc.normalize();
+
+      Eigen::Transform<T, 3, Eigen::Isometry> T_wb = Eigen::Transform<T, 3, Eigen::Isometry>::Identity();
+      T_wb.linear() = q_wb.toRotationMatrix();
+      T_wb.translation() = t_wb;
+
+      Eigen::Transform<T, 3, Eigen::Isometry> T_fc = Eigen::Transform<T, 3, Eigen::Isometry>::Identity();
+      T_fc.linear() = q_fc.toRotationMatrix();
+      T_fc.translation() = t_fc;
+
+      Eigen::Transform<T, 3, Eigen::Isometry> T_bt = T_base_tool_.cast<T>();
+
+      Eigen::Transform<T, 3, Eigen::Isometry> T_wc_pred = T_wb * T_bt * T_fc;
+      Eigen::Transform<T, 3, Eigen::Isometry> T_err = T_world_cube_meas_.inverse().cast<T>() * T_wc_pred;
+
+      Eigen::Matrix<T, 3, 1> t_err = T_err.translation();
+      Eigen::AngleAxis<T> aa(T_err.linear());
+      Eigen::Matrix<T, 3, 1> r_err = aa.axis() * aa.angle();
+
+      residuals[0] = t_err.x() / static_cast<T>(pos_sigma_);
+      residuals[1] = t_err.y() / static_cast<T>(pos_sigma_);
+      residuals[2] = t_err.z() / static_cast<T>(pos_sigma_);
+      residuals[3] = r_err.x() / static_cast<T>(rot_sigma_);
+      residuals[4] = r_err.y() / static_cast<T>(rot_sigma_);
+      residuals[5] = r_err.z() / static_cast<T>(rot_sigma_);
+      return true;
+    }
+
+    Eigen::Isometry3d T_world_cube_meas_;
+    Eigen::Isometry3d T_base_tool_;
+    double pos_sigma_;
+    double rot_sigma_;
+  };
+
+  bool computeInitialWorldBase(Eigen::Isometry3d &T_wb_init)
+  {
+    if (base_cube_positions_.empty() || world_cube_positions_.size() != base_cube_positions_.size())
+    {
+      ROS_ERROR("[WorldRobot] 无法计算初始值，样本为空或维度不匹配");
+      return false;
+    }
+
+    Eigen::Quaterniond q_wb = averageRotationPairs();
+    Eigen::Matrix3d R_wb = q_wb.toRotationMatrix();
+
+    Eigen::Vector3d mean_base = Eigen::Vector3d::Zero();
+    Eigen::Vector3d mean_world = Eigen::Vector3d::Zero();
+    const size_t n = base_cube_positions_.size();
+    for (size_t i = 0; i < n; ++i)
+    {
+      mean_base += base_cube_positions_[i];
+      mean_world += world_cube_positions_[i];
+    }
+    mean_base /= static_cast<double>(n);
+    mean_world /= static_cast<double>(n);
+
+    Eigen::Vector3d t_wb = mean_world - R_wb * mean_base;
+
+    T_wb_init = Eigen::Isometry3d::Identity();
+    T_wb_init.linear() = R_wb;
+    T_wb_init.translation() = t_wb;
+    return true;
+  }
+
+  void resetSamples()
+  {
+    base_cube_positions_.clear();
+    base_cube_rotations_.clear();
+    world_cube_positions_.clear();
+    world_cube_rotations_.clear();
+    base_tool_positions_.clear();
+    base_tool_rotations_.clear();
+  }
+
   geometry_msgs::PoseStamped latest_cube_pose_;
   bool has_cube_pose_ = false;
 
@@ -109,6 +221,8 @@ private:
 
   std::vector<Eigen::Vector3d> base_cube_positions_;
   std::vector<Eigen::Quaterniond> base_cube_rotations_;
+  std::vector<Eigen::Vector3d> base_tool_positions_;
+  std::vector<Eigen::Quaterniond> base_tool_rotations_;
   std::vector<Eigen::Vector3d> world_cube_positions_;
   std::vector<Eigen::Quaterniond> world_cube_rotations_;
 
@@ -120,6 +234,9 @@ private:
   std::string cube_topic_;
   std::string stats_topic_;
   std::string output_yaml_path_;
+  std::string faces_output_yaml_path_;
+  std::string tool_offset_output_yaml_path_;
+  std::string faces_input_yaml_path_;
   int min_samples_ = 10;
   bool publish_tf_ = false;
 
@@ -127,6 +244,8 @@ private:
 
   bool has_solution_ = false;
   geometry_msgs::TransformStamped solution_tf_;
+
+  std::map<int, FaceParam> faces_;
 
   void cubeCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
   {
@@ -199,14 +318,24 @@ private:
     Eigen::Isometry3d T_world_cube_meas = T_world_cam * T_cam_cube;
 
     Eigen::Isometry3d T_base_tool = transformToEigen(T_base_tool_msg.transform);
+    Eigen::Quaterniond q_base_tool(T_base_tool.rotation());
+    q_base_tool.normalize();
+    base_tool_positions_.push_back(T_base_tool.translation());
+    base_tool_rotations_.push_back(q_base_tool);
+
     Eigen::Isometry3d T_tool_cube = Eigen::Isometry3d::Identity();
     T_tool_cube.translation() = cube_offset_;
     Eigen::Isometry3d T_base_cube_pred = T_base_tool * T_tool_cube;
 
+    Eigen::Quaterniond q_base_cube(T_base_cube_pred.rotation());
+    q_base_cube.normalize();
     base_cube_positions_.push_back(T_base_cube_pred.translation());
-    base_cube_rotations_.push_back(Eigen::Quaterniond(T_base_cube_pred.rotation()));
+    base_cube_rotations_.push_back(q_base_cube);
+
+    Eigen::Quaterniond q_world_cube(T_world_cube_meas.rotation());
+    q_world_cube.normalize();
     world_cube_positions_.push_back(T_world_cube_meas.translation());
-    world_cube_rotations_.push_back(Eigen::Quaterniond(T_world_cube_meas.rotation()));
+    world_cube_rotations_.push_back(q_world_cube);
 
     const size_t idx = base_cube_positions_.size();
     const Eigen::Vector3d p_w = T_world_cube_meas.translation();
@@ -251,6 +380,16 @@ private:
                         jaka_close_contro::WorldRobotCalibration::Response &res)
   {
     const size_t n = base_cube_positions_.size();
+    if (n != base_tool_positions_.size() || n != base_tool_rotations_.size())
+    {
+      res.success = false;
+      res.message = "采样数据尺寸不一致，请重新采样";
+      ROS_ERROR("[WorldRobot] 样本数量不一致：base_cube=%zu, base_tool=%zu, base_tool_rot=%zu", n, base_tool_positions_.size(),
+                base_tool_rotations_.size());
+      resetSamples();
+      return true;
+    }
+
     if (n < static_cast<size_t>(min_samples_))
     {
       res.success = false;
@@ -258,27 +397,82 @@ private:
       ROS_ERROR("[WorldRobot] 样本不足：%zu/%d", n, min_samples_);
       return true;
     }
+    Eigen::Isometry3d T_wb_init;
+    if (!computeInitialWorldBase(T_wb_init))
+    {
+      res.success = false;
+      res.message = "初始值求解失败";
+      return true;
+    }
 
-    Eigen::Quaterniond q_wb = averageRotationPairs();
-    Eigen::Matrix3d R_wb = q_wb.toRotationMatrix();
+    Eigen::Quaterniond q_wb_init(T_wb_init.rotation());
+    q_wb_init.normalize();
+    double world_base_param[7] = {T_wb_init.translation().x(), T_wb_init.translation().y(), T_wb_init.translation().z(),
+                                  q_wb_init.x(), q_wb_init.y(), q_wb_init.z(), q_wb_init.w()};
 
-    Eigen::Vector3d mean_base = Eigen::Vector3d::Zero();
-    Eigen::Vector3d mean_world = Eigen::Vector3d::Zero();
+    double flange_cube_param[7] = {cube_offset_.x(), cube_offset_.y(), cube_offset_.z(), 0.0, 0.0, 0.0, 1.0};
+
+    ceres::Problem problem;
+    ceres::LocalParameterization *se3_param_world = new ceres::ProductParameterization(
+        new ceres::IdentityParameterization(3), new ceres::QuaternionParameterization());
+    ceres::LocalParameterization *se3_param_flange = new ceres::ProductParameterization(
+        new ceres::IdentityParameterization(3), new ceres::QuaternionParameterization());
+    problem.AddParameterBlock(world_base_param, 7, se3_param_world);
+    problem.AddParameterBlock(flange_cube_param, 7, se3_param_flange);
+
+    const double pos_sigma = 0.01;
+    const double rot_sigma = 5.0 * M_PI / 180.0;
+
     for (size_t i = 0; i < n; ++i)
     {
-      mean_base += base_cube_positions_[i];
-      mean_world += world_cube_positions_[i];
+      Eigen::Isometry3d T_world_cube_meas = Eigen::Isometry3d::Identity();
+      Eigen::Quaterniond q_wc = world_cube_rotations_[i];
+      q_wc.normalize();
+      T_world_cube_meas.linear() = q_wc.toRotationMatrix();
+      T_world_cube_meas.translation() = world_cube_positions_[i];
+
+      Eigen::Isometry3d T_base_tool = Eigen::Isometry3d::Identity();
+      Eigen::Quaterniond q_bt = base_tool_rotations_[i];
+      q_bt.normalize();
+      T_base_tool.linear() = q_bt.toRotationMatrix();
+      T_base_tool.translation() = base_tool_positions_[i];
+
+      ceres::CostFunction *cost = new ceres::AutoDiffCostFunction<JointCalibResidual, 6, 7, 7>(
+          new JointCalibResidual(T_world_cube_meas, T_base_tool, pos_sigma, rot_sigma));
+      problem.AddResidualBlock(cost, nullptr, world_base_param, flange_cube_param);
     }
-    mean_base /= static_cast<double>(n);
-    mean_world /= static_cast<double>(n);
 
-    Eigen::Vector3d t_wb = mean_world - R_wb * mean_base;
+    ceres::Solver::Options options;
+    options.linear_solver_type = ceres::DENSE_QR;
+    options.max_num_iterations = 100;
+    options.minimizer_progress_to_stdout = false;
 
-    Eigen::Isometry3d T_wb = Eigen::Isometry3d::Identity();
-    T_wb.linear() = R_wb;
-    T_wb.translation() = t_wb;
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
 
-    solution_tf_ = eigenToTransform(T_wb);
+    if (!summary.IsSolutionUsable())
+    {
+      res.success = false;
+      res.message = "Ceres 求解失败: " + summary.BriefReport();
+      ROS_ERROR("[WorldRobot] 联合标定失败：%s", summary.FullReport().c_str());
+      return true;
+    }
+
+    Eigen::Quaterniond q_wb(world_base_param[6], world_base_param[3], world_base_param[4], world_base_param[5]);
+    q_wb.normalize();
+    Eigen::Vector3d t_wb(world_base_param[0], world_base_param[1], world_base_param[2]);
+    Eigen::Isometry3d T_wb_opt = Eigen::Isometry3d::Identity();
+    T_wb_opt.linear() = q_wb.toRotationMatrix();
+    T_wb_opt.translation() = t_wb;
+
+    Eigen::Quaterniond q_fc(flange_cube_param[6], flange_cube_param[3], flange_cube_param[4], flange_cube_param[5]);
+    q_fc.normalize();
+    Eigen::Vector3d t_fc(flange_cube_param[0], flange_cube_param[1], flange_cube_param[2]);
+    Eigen::Isometry3d T_fc_opt = Eigen::Isometry3d::Identity();
+    T_fc_opt.linear() = q_fc.toRotationMatrix();
+    T_fc_opt.translation() = t_fc;
+
+    solution_tf_ = eigenToTransform(T_wb_opt);
     solution_tf_.header.frame_id = world_frame_;
     solution_tf_.child_frame_id = robot_base_frame_;
     solution_tf_.header.stamp = ros::Time::now();
@@ -286,15 +480,12 @@ private:
 
     saveCalibration(solution_tf_);
 
-    ROS_INFO("[WorldRobot] 求解完成，world->%s: translation = [%.3f, %.3f, %.3f], rotation(xyzw) = [%.4f, %.4f, %.4f, %.4f]",
+    ROS_INFO("[WorldRobot] 联合标定完成，world->%s: translation = [%.3f, %.3f, %.3f], rotation(xyzw) = [%.4f, %.4f, %.4f, %.4f]",
              robot_base_frame_.c_str(),
              t_wb.x(), t_wb.y(), t_wb.z(),
              q_wb.x(), q_wb.y(), q_wb.z(), q_wb.w());
-    ROS_INFO("[WorldRobot] 如需静态发布，可在 launch 中添加：");
-    ROS_INFO("static_transform_publisher %.6f %.6f %.6f %.6f %.6f %.6f %.6f %s %s 10",
-             t_wb.x(), t_wb.y(), t_wb.z(),
-             q_wb.x(), q_wb.y(), q_wb.z(), q_wb.w(),
-             world_frame_.c_str(), robot_base_frame_.c_str());
+    ROS_INFO("[WorldRobot] 工具外参（flange->cube_center）: translation = [%.3f, %.3f, %.3f], rotation(xyzw) = [%.4f, %.4f, %.4f, %.4f]",
+             t_fc.x(), t_fc.y(), t_fc.z(), q_fc.x(), q_fc.y(), q_fc.z(), q_fc.w());
 
     res.success = true;
     res.message = "标定完成";
@@ -306,13 +497,37 @@ private:
     res.rotation.z = q_wb.z();
     res.rotation.w = q_wb.w();
 
+    res.tool_extrinsic.position.x = t_fc.x();
+    res.tool_extrinsic.position.y = t_fc.y();
+    res.tool_extrinsic.position.z = t_fc.z();
+    res.tool_extrinsic.orientation.x = q_fc.x();
+    res.tool_extrinsic.orientation.y = q_fc.y();
+    res.tool_extrinsic.orientation.z = q_fc.z();
+    res.tool_extrinsic.orientation.w = q_fc.w();
+
     tf2::Transform T_WB_est;
     tf2::Quaternion q_tf(q_wb.x(), q_wb.y(), q_wb.z(), q_wb.w());
     q_tf.normalize();
     T_WB_est.setRotation(q_tf);
     T_WB_est.setOrigin(tf2::Vector3(t_wb.x(), t_wb.y(), t_wb.z()));
 
-    const ResidualStats stats = computeResidualStats(T_WB_est);
+    tf2::Transform T_FC_est;
+    tf2::Quaternion q_fc_tf(q_fc.x(), q_fc.y(), q_fc.z(), q_fc.w());
+    q_fc_tf.normalize();
+    T_FC_est.setRotation(q_fc_tf);
+    T_FC_est.setOrigin(tf2::Vector3(t_fc.x(), t_fc.y(), t_fc.z()));
+
+    const ResidualStats stats = computeResidualStats(T_WB_est, T_FC_est);
+
+    writeToolOffsetYaml(tool_offset_output_yaml_path_, T_FC_est);
+    if (!faces_.empty())
+    {
+      writeCubeFacesYaml(faces_output_yaml_path_, faces_);
+    }
+    else
+    {
+      ROS_WARN("[WorldRobot] 未加载面信息，跳过面配置写出");
+    }
 
     res.position_rmse_m = stats.position_rmse_m;
     res.position_mean_m = stats.position_mean_m;
@@ -333,6 +548,8 @@ private:
     res.extrinsic_rot_mean_deg = stats.extrinsic_rot_mean_deg;
     res.extrinsic_rot_std_deg = stats.extrinsic_rot_std_deg;
     res.extrinsic_rot_max_deg = stats.extrinsic_rot_max_deg;
+
+    resetSamples();
 
     return true;
   }
@@ -457,15 +674,128 @@ private:
     }
   }
 
-  ResidualStats computeResidualStats(const tf2::Transform &T_WB_est)
+  bool loadFacesYaml()
+  {
+    try
+    {
+      YAML::Node root = YAML::LoadFile(faces_input_yaml_path_);
+      if (!root["faces"])
+      {
+        ROS_WARN("[WorldRobot] faces_input_yaml 缺少 faces 字段: %s", faces_input_yaml_path_.c_str());
+        return false;
+      }
+
+      faces_.clear();
+      for (const auto &f : root["faces"])
+      {
+        if (!f["id"] || !f["translation"] || !f["rpy_deg"])
+        {
+          ROS_WARN("[WorldRobot] faces_input_yaml 条目缺字段，跳过一项");
+          continue;
+        }
+        FaceParam fp;
+        fp.id = f["id"].as<int>();
+        auto tr = f["translation"];
+        auto rpy = f["rpy_deg"];
+        fp.t = Eigen::Vector3d(tr[0].as<double>(), tr[1].as<double>(), tr[2].as<double>());
+        fp.rpy = Eigen::Vector3d(rpy[0].as<double>() * M_PI / 180.0,
+                                 rpy[1].as<double>() * M_PI / 180.0,
+                                 rpy[2].as<double>() * M_PI / 180.0);
+        faces_[fp.id] = fp;
+      }
+
+      ROS_INFO("[WorldRobot] 已加载 %zu 个面定义用于输出: %s", faces_.size(), faces_input_yaml_path_.c_str());
+      return !faces_.empty();
+    }
+    catch (const std::exception &e)
+    {
+      ROS_WARN("[WorldRobot] faces_input_yaml 读取失败: %s", e.what());
+      return false;
+    }
+  }
+
+  void writeToolOffsetYaml(const std::string &path, const tf2::Transform &T_fc)
+  {
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "tool_offset" << YAML::Value;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "translation" << YAML::Value << YAML::Flow << YAML::BeginSeq << T_fc.getOrigin().x()
+            << T_fc.getOrigin().y() << T_fc.getOrigin().z() << YAML::EndSeq;
+    emitter << YAML::Key << "rotation" << YAML::Value << YAML::Flow << YAML::BeginSeq << T_fc.getRotation().x()
+            << T_fc.getRotation().y() << T_fc.getRotation().z() << T_fc.getRotation().w() << YAML::EndSeq;
+    emitter << YAML::EndMap;
+    emitter << YAML::EndMap;
+
+    try
+    {
+      std::ofstream fout(path);
+      fout << emitter.c_str();
+      fout.close();
+      ROS_INFO("[WorldRobot] 已写入工具外参: %s", path.c_str());
+    }
+    catch (const std::exception &e)
+    {
+      ROS_ERROR("[WorldRobot] 写入工具外参失败: %s", e.what());
+    }
+  }
+
+  void writeCubeFacesYaml(const std::string &path, const std::map<int, FaceParam> &faces)
+  {
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "faces" << YAML::Value << YAML::BeginSeq;
+
+    std::vector<int> ids;
+    ids.reserve(faces.size());
+    for (const auto &kv : faces)
+    {
+      ids.push_back(kv.first);
+    }
+    std::sort(ids.begin(), ids.end());
+
+    for (int id : ids)
+    {
+      const FaceParam &fp = faces.at(id);
+      emitter << YAML::BeginMap;
+      emitter << YAML::Key << "id" << YAML::Value << fp.id;
+      emitter << YAML::Key << "translation" << YAML::Value << YAML::Flow << YAML::BeginSeq << fp.t.x() << fp.t.y()
+              << fp.t.z() << YAML::EndSeq;
+      emitter << YAML::Key << "rpy_deg" << YAML::Value << YAML::Flow << YAML::BeginSeq << fp.rpy.x() * 180.0 / M_PI
+              << fp.rpy.y() * 180.0 / M_PI << fp.rpy.z() * 180.0 / M_PI << YAML::EndSeq;
+      emitter << YAML::EndMap;
+    }
+
+    emitter << YAML::EndSeq;
+    emitter << YAML::EndMap;
+
+    try
+    {
+      std::ofstream fout(path);
+      fout << emitter.c_str();
+      fout.close();
+      ROS_INFO("[WorldRobot] 已写入面配置: %s", path.c_str());
+    }
+    catch (const std::exception &e)
+    {
+      ROS_ERROR("[WorldRobot] 写入面配置失败: %s", e.what());
+    }
+  }
+
+  ResidualStats computeResidualStats(const tf2::Transform &T_WB_est, const tf2::Transform &T_FC_est)
   {
     ResidualStats stats;
-    const size_t N = base_cube_positions_.size();
+    const size_t N = world_cube_positions_.size();
     stats.sample_count = N;
 
     if (N == 0)
     {
       ROS_WARN("[WorldRobot] 无样本可计算残差统计");
+      return stats;
+    }
+    if (base_tool_positions_.size() != N || base_tool_rotations_.size() != N)
+    {
+      ROS_WARN("[WorldRobot] 残差统计维度不一致，无法计算");
       return stats;
     }
     if (N < 2)
@@ -490,13 +820,13 @@ private:
       T_W_cube_meas.setOrigin(tf2::Vector3(world_cube_positions_[i].x(), world_cube_positions_[i].y(), world_cube_positions_[i].z()));
       T_W_cube_meas.setRotation(q_w);
 
-      tf2::Transform T_B_cube_pred;
-      tf2::Quaternion q_b(base_cube_rotations_[i].x(), base_cube_rotations_[i].y(), base_cube_rotations_[i].z(), base_cube_rotations_[i].w());
-      q_b.normalize();
-      T_B_cube_pred.setOrigin(tf2::Vector3(base_cube_positions_[i].x(), base_cube_positions_[i].y(), base_cube_positions_[i].z()));
-      T_B_cube_pred.setRotation(q_b);
+      tf2::Transform T_B_tool;
+      tf2::Quaternion q_bt(base_tool_rotations_[i].x(), base_tool_rotations_[i].y(), base_tool_rotations_[i].z(), base_tool_rotations_[i].w());
+      q_bt.normalize();
+      T_B_tool.setOrigin(tf2::Vector3(base_tool_positions_[i].x(), base_tool_positions_[i].y(), base_tool_positions_[i].z()));
+      T_B_tool.setRotation(q_bt);
 
-      tf2::Transform T_W_cube_pred = T_WB_est * T_B_cube_pred;
+      tf2::Transform T_W_cube_pred = T_WB_est * T_B_tool * T_FC_est;
       tf2::Transform T_err = T_W_cube_pred.inverse() * T_W_cube_meas;
 
       tf2::Vector3 t_err = T_err.getOrigin();
@@ -505,7 +835,7 @@ private:
       q_err.normalize();
       double e_R = q_err.getAngle() * 180.0 / M_PI;
 
-      tf2::Transform T_WB_i = T_W_cube_meas * T_B_cube_pred.inverse();
+      tf2::Transform T_WB_i = T_W_cube_meas * (T_B_tool * T_FC_est).inverse();
       tf2::Transform T_disp = T_WB_est.inverse() * T_WB_i;
       tf2::Vector3 t_disp = T_disp.getOrigin();
       double e_t_disp = t_disp.length();

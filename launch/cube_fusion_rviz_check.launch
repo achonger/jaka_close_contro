@@ -3,6 +3,7 @@
 
   <arg name="svo_file" default="" />
   <arg name="faces_yaml" default="$(find jaka_close_contro)/config/cube_faces_current.yaml" />
+  <arg name="tool_offset_yaml" default="$(find jaka_close_contro)/config/tool_offset_current.yaml" />
   <arg name="use_debug_node" default="true" />
 
   <!-- 1. ZED2i 相机 -->
@@ -46,6 +47,7 @@
   <!-- 4. 多面融合 -->
   <node pkg="jaka_close_contro" type="cube_multi_face_fusion_node" name="cube_multi_face_fusion" output="screen">
     <param name="faces_yaml"           value="$(arg faces_yaml)" />
+    <param name="tool_offset_yaml"     value="$(arg tool_offset_yaml)" />
     <param name="fiducial_topic"       value="/tool_fiducials" />
     <param name="cube_frame"           value="cube_center" />
     <param name="camera_frame_default" value="zed2i_left_camera_optical_frame" />
