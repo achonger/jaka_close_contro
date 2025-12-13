@@ -10,6 +10,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <yaml-cpp/yaml.h>
 #include <ros/package.h>
+#include <jaka_close_contro/cube_geometry_utils.h>
 
 #include <jaka_close_contro/CubeFusionStats.h>
 
@@ -79,7 +80,7 @@ public:
     ROS_INFO_STREAM("[Fusion] cube_frame: " << cube_frame_);
     ROS_INFO("[Fusion] publish_tool_tf: %s", publish_tool_tf_ ? "true" : "false");
 
-    if (faces_yaml_path_.empty() || !loadFacesYaml(faces_yaml_path_))
+    if (faces_yaml_path_.empty() || !cube_geometry::loadFacesYaml(faces_yaml_path_, face2cube_))
     {
       ROS_ERROR("[Fusion] Failed to load faces YAML. Exiting.");
       ros::shutdown();
@@ -100,51 +101,6 @@ public:
   }
 
 private:
-  // --------------- YAML 读取 ---------------
-  bool loadFacesYaml(const std::string &path)
-  {
-    try
-    {
-      ROS_INFO("[Fusion] Loading YAML from: %s", path.c_str());
-      YAML::Node root = YAML::LoadFile(path);
-
-      if (!root["faces"])
-      {
-        ROS_ERROR("[Fusion] YAML missing 'faces' section");
-        return false;
-      }
-
-      for (const auto &f : root["faces"])
-      {
-        int id = f["id"].as<int>();
-        auto tr = f["translation"];
-        auto rpy = f["rpy_deg"];
-        double tx = tr[0].as<double>();
-        double ty = tr[1].as<double>();
-        double tz = tr[2].as<double>();
-        double rr = rpy[0].as<double>() * M_PI / 180.0;
-        double pp = rpy[1].as<double>() * M_PI / 180.0;
-        double yy = rpy[2].as<double>() * M_PI / 180.0;
-        tf2::Matrix3x3 R;
-        R.setRPY(rr, pp, yy);
-        tf2::Vector3 t(tx, ty, tz);
-        tf2::Transform T_cube_face(R, t);
-        face2cube_[id] = T_cube_face.inverse();
-
-        ROS_INFO("[Fusion] Loaded face ID=%d: trans=[%.3f,%.3f,%.3f], rpy_deg=[%.1f,%.1f,%.1f]",
-                 id, tx, ty, tz,
-                 rpy[0].as<double>(), rpy[1].as<double>(), rpy[2].as<double>());
-      }
-
-      return true;
-    }
-    catch (const std::exception &e)
-    {
-      ROS_ERROR("[Fusion] YAML load error: %s", e.what());
-      return false;
-    }
-  }
-
   bool loadToolOffsetYaml(const std::string &path)
   {
     try

@@ -2,186 +2,326 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Transform.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/transform_listener.h>
 #include <fiducial_msgs/FiducialTransformArray.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
-#include <boost/bind.hpp>
+#include <boost/bind/bind.hpp>
 #include <yaml-cpp/yaml.h>
 #include <ros/package.h>
 
+#include <cmath>
+#include <deque>
 #include <fstream>
+#include <iomanip>
 #include <map>
+#include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
-#include <cmath>
+
+#include <jaka_close_contro/cube_geometry_utils.h>
 
 namespace
 {
-geometry_msgs::Pose transformToPoseMsg(const tf2::Transform &tf)
-{
-  geometry_msgs::Pose out;
-  const tf2::Vector3 &t = tf.getOrigin();
-  out.position.x = t.x();
-  out.position.y = t.y();
-  out.position.z = t.z();
-  tf2::Quaternion q = tf.getRotation();
-  q.normalize();
-  out.orientation = tf2::toMsg(q);
-  return out;
-}
-
-struct StatResult
+struct StatSnapshot
 {
   double mean{0.0};
   double rms{0.0};
-  double stddev{0.0};
   double max{0.0};
+  size_t count{0};
 };
 
-StatResult computeStats(const std::vector<double> &vals)
+struct FaceSample
 {
-  StatResult out;
-  if (vals.empty())
+  int face_id{0};
+  tf2::Transform T_cam_face;
+  tf2::Transform T_cam_cube;
+  double pos_err{0.0};
+  double ang_err_deg{0.0};
+  double image_error{0.0};
+  double object_error{0.0};
+  double weight{0.0};
+};
+
+class ErrorAccumulator
+{
+public:
+  explicit ErrorAccumulator(size_t window_size = 0)
+      : window_size_(window_size)
   {
+  }
+
+  void addSample(double pos_err, double ang_err)
+  {
+    if (window_size_ > 0)
+    {
+      if (pos_vals_.size() >= window_size_)
+      {
+        popFront();
+      }
+      pos_vals_.push_back(pos_err);
+      ang_vals_.push_back(ang_err);
+      pos_sum_ += pos_err;
+      pos_sumsq_ += pos_err * pos_err;
+      ang_sum_ += ang_err;
+      ang_sumsq_ += ang_err * ang_err;
+      pos_max_ = std::max(pos_max_, pos_err);
+      ang_max_ = std::max(ang_max_, ang_err);
+    }
+    else
+    {
+      ++count_;
+      pos_sum_ += pos_err;
+      pos_sumsq_ += pos_err * pos_err;
+      ang_sum_ += ang_err;
+      ang_sumsq_ += ang_err * ang_err;
+      pos_max_ = std::max(pos_max_, pos_err);
+      ang_max_ = std::max(ang_max_, ang_err);
+    }
+  }
+
+  StatSnapshot snapshotPos() const
+  {
+    return snapshot(pos_sum_, pos_sumsq_, pos_max_);
+  }
+
+  StatSnapshot snapshotAng() const
+  {
+    return snapshot(ang_sum_, ang_sumsq_, ang_max_);
+  }
+
+  void reset()
+  {
+    pos_vals_.clear();
+    ang_vals_.clear();
+    pos_sum_ = pos_sumsq_ = ang_sum_ = ang_sumsq_ = 0.0;
+    pos_max_ = ang_max_ = 0.0;
+    count_ = 0;
+  }
+
+private:
+  void popFront()
+  {
+    if (window_size_ == 0 || pos_vals_.empty())
+    {
+      return;
+    }
+    const double old_pos = pos_vals_.front();
+    const double old_ang = ang_vals_.front();
+    pos_vals_.pop_front();
+    ang_vals_.pop_front();
+    pos_sum_ -= old_pos;
+    pos_sumsq_ -= old_pos * old_pos;
+    ang_sum_ -= old_ang;
+    ang_sumsq_ -= old_ang * old_ang;
+
+    if (old_pos >= pos_max_ - 1e-12)
+    {
+      pos_max_ = 0.0;
+      for (double v : pos_vals_)
+      {
+        pos_max_ = std::max(pos_max_, v);
+      }
+    }
+    if (old_ang >= ang_max_ - 1e-12)
+    {
+      ang_max_ = 0.0;
+      for (double v : ang_vals_)
+      {
+        ang_max_ = std::max(ang_max_, v);
+      }
+    }
+  }
+
+  StatSnapshot snapshot(double sum, double sumsq, double max_val) const
+  {
+    StatSnapshot out;
+    const size_t n = (window_size_ > 0) ? pos_vals_.size() : count_;
+    if (n == 0)
+    {
+      return out;
+    }
+    const double denom = static_cast<double>(n);
+    out.count = n;
+    out.mean = sum / denom;
+    out.rms = std::sqrt(sumsq / denom);
+    out.max = max_val;
     return out;
   }
-  const double N = static_cast<double>(vals.size());
-  double sum = 0.0;
-  double sum_sq = 0.0;
-  out.max = 0.0;
-  for (double v : vals)
-  {
-    sum += v;
-    sum_sq += v * v;
-    if (v > out.max)
-    {
-      out.max = v;
-    }
-  }
-  out.mean = sum / N;
-  out.rms = std::sqrt(sum_sq / N);
-  if (vals.size() > 1)
-  {
-    double var = 0.0;
-    for (double v : vals)
-    {
-      const double d = v - out.mean;
-      var += d * d;
-    }
-    var /= (N - 1.0);
-    out.stddev = std::sqrt(var);
-  }
-  return out;
-}
+
+  size_t window_size_{0};
+  std::deque<double> pos_vals_;
+  std::deque<double> ang_vals_;
+  double pos_sum_{0.0};
+  double pos_sumsq_{0.0};
+  double ang_sum_{0.0};
+  double ang_sumsq_{0.0};
+  double pos_max_{0.0};
+  double ang_max_{0.0};
+  size_t count_{0};
+};
 } // namespace
 
 class CubeFusionDebugNode
 {
 public:
   CubeFusionDebugNode(ros::NodeHandle &nh, ros::NodeHandle &pnh)
-      : nh_(nh), pnh_(pnh), sync_(SyncPolicy(10), fid_sub_, fused_sub_)
+      : nh_(nh), pnh_(pnh), tf_listener_(tf_buffer_)
   {
     const std::string default_faces_yaml = ros::package::getPath("jaka_close_contro") + "/config/cube_faces_current.yaml";
     pnh_.param<std::string>("faces_yaml", faces_yaml_path_, default_faces_yaml);
     pnh_.param<std::string>("fiducial_topic", fiducial_topic_, std::string("/tool_fiducials"));
-    pnh_.param<std::string>("fused_topic", fused_topic_, std::string("/cube_center_fused"));
-    pnh_.param<std::string>("cube_frame", cube_frame_, std::string("cube_center"));
+    pnh_.param<std::string>("fused_pose_topic", fused_pose_topic_, std::string("/cube_center_fused"));
+    pnh_.param<std::string>("fused_frame", fused_frame_, std::string("cube_center_fused"));
     pnh_.param<std::string>("camera_frame", camera_frame_param_, std::string(""));
-    pnh_.param<std::string>("output_csv", output_csv_path_, std::string(""));
-    pnh_.param<bool>("publish_predicted_pose", publish_predicted_pose_, true);
-    pnh_.param<double>("sync_slop_sec", sync_slop_sec_, 0.03);
+    pnh_.param<bool>("fused_from_tf", fused_from_tf_, false);
+    pnh_.param<double>("print_rate", print_rate_hz_, 10.0);
+    pnh_.param<std::string>("csv_path", csv_path_, std::string(""));
+    pnh_.param<int>("stats_window", stats_window_size_, 0);
+    pnh_.param<bool>("broadcast_tags", broadcast_tags_, true);
+    pnh_.param<bool>("broadcast_faces", broadcast_faces_, true);
+    pnh_.param<bool>("broadcast_fused", broadcast_fused_, true);
 
-    sync_.setMaxIntervalDuration(ros::Duration(sync_slop_sec_));
-
-    if (faces_yaml_path_.empty() || !loadFacesYaml(faces_yaml_path_))
+    if (faces_yaml_path_.empty() || !cube_geometry::loadFacesYaml(faces_yaml_path_, face_to_cube_))
     {
-      ROS_FATAL("[FusionDebug] faces_yaml 未配置或解析失败");
-      throw std::runtime_error("faces_yaml missing");
+      throw std::runtime_error("faces_yaml missing or failed to load");
     }
 
-    fid_sub_.subscribe(nh_, fiducial_topic_, 1);
-    fused_sub_.subscribe(nh_, fused_topic_, 1);
-    sync_.registerCallback(boost::bind(&CubeFusionDebugNode::callback, this, _1, _2));
-
-    ROS_INFO("[FusionDebug] faces_yaml=%s, fid_topic=%s, fused_topic=%s, cube_frame=%s", faces_yaml_path_.c_str(),
-             fiducial_topic_.c_str(), fused_topic_.c_str(), cube_frame_.c_str());
-    if (!output_csv_path_.empty())
+    if (!csv_path_.empty())
     {
-      csv_.open(output_csv_path_, std::ios::out | std::ios::trunc);
+      csv_.open(csv_path_, std::ios::out | std::ios::trunc);
       if (csv_.is_open())
       {
-        csv_ << "stamp,face_id,pos_err_m,ang_err_deg,fused_x,fused_y,fused_z,pred_x,pred_y,pred_z\n";
-        ROS_INFO("[FusionDebug] 将结果写入 CSV: %s", output_csv_path_.c_str());
+        csv_ << "stamp,face_id,fused_x,fused_y,fused_z,fused_qx,fused_qy,fused_qz,fused_qw,pred_x,pred_y,pred_z,pred_qx,pred_qy,pred_qz,pred_qw,pos_err,ang_err_deg,image_error,object_error,weight\n";
+        ROS_INFO("[FusionDebug] Writing CSV to %s", csv_path_.c_str());
       }
       else
       {
-        ROS_WARN("[FusionDebug] 无法打开 CSV: %s", output_csv_path_.c_str());
+        ROS_WARN("[FusionDebug] Failed to open CSV: %s", csv_path_.c_str());
       }
+    }
+
+    if (print_rate_hz_ <= 0.0)
+    {
+      print_rate_hz_ = 10.0;
+    }
+
+    print_timer_ = nh_.createTimer(ros::Duration(1.0 / print_rate_hz_), &CubeFusionDebugNode::printTimer, this);
+
+    if (fused_from_tf_)
+    {
+      fiducial_sub_tf_ = nh_.subscribe(fiducial_topic_, 1, &CubeFusionDebugNode::fiducialOnlyCallback, this);
+      ROS_INFO("[FusionDebug] Using TF for fused pose. Listening to fiducials on %s", fiducial_topic_.c_str());
+    }
+    else
+    {
+      fid_sub_.reset(new message_filters::Subscriber<fiducial_msgs::FiducialTransformArray>(nh_, fiducial_topic_, 1));
+      fused_sub_.reset(new message_filters::Subscriber<geometry_msgs::PoseStamped>(nh_, fused_pose_topic_, 1));
+      sync_.reset(new message_filters::Synchronizer<SyncPolicy>(SyncPolicy(20), *fid_sub_, *fused_sub_));
+      sync_->registerCallback(boost::bind(&CubeFusionDebugNode::syncedCallback, this,
+                                          boost::placeholders::_1, boost::placeholders::_2));
+      ROS_INFO("[FusionDebug] Syncing fiducials(%s) with fused pose(%s)", fiducial_topic_.c_str(), fused_pose_topic_.c_str());
     }
   }
 
 private:
   using SyncPolicy = message_filters::sync_policies::ApproximateTime<fiducial_msgs::FiducialTransformArray, geometry_msgs::PoseStamped>;
 
-  bool loadFacesYaml(const std::string &path)
+  tf2::Quaternion normalizeQuat(const tf2::Quaternion &qin) const
+  {
+    tf2::Quaternion q = qin;
+    q.normalize();
+    return q;
+  }
+
+  double angularErrorDeg(const tf2::Quaternion &qa, const tf2::Quaternion &qb) const
+  {
+    const double dot = std::abs(qa.x() * qb.x() + qa.y() * qb.y() + qa.z() * qb.z() + qa.w() * qb.w());
+    const double ang = 2.0 * std::acos(std::min(1.0, std::max(-1.0, dot)));
+    return ang * 180.0 / M_PI;
+  }
+
+  geometry_msgs::TransformStamped toTransformMsg(const tf2::Transform &tf, const ros::Time &stamp,
+                                                 const std::string &parent, const std::string &child) const
+  {
+    geometry_msgs::TransformStamped msg;
+    msg.header.stamp = stamp;
+    msg.header.frame_id = parent;
+    msg.child_frame_id = child;
+    msg.transform = tf2::toMsg(tf);
+    return msg;
+  }
+
+  void broadcastIfNeeded(const tf2::Transform &tf, const ros::Time &stamp, const std::string &parent,
+                         const std::string &child, bool enabled)
+  {
+    if (!enabled)
+    {
+      return;
+    }
+    tf2::Transform Tn = tf;
+    Tn.setRotation(normalizeQuat(Tn.getRotation()));
+    tf_broadcaster_.sendTransform(toTransformMsg(Tn, stamp, parent, child));
+  }
+
+  bool getFusedFromTf(const ros::Time &stamp, const std::string &cam_frame, tf2::Transform &out)
   {
     try
     {
-      YAML::Node root = YAML::LoadFile(path);
-      if (!root["faces"])
-      {
-        ROS_ERROR("[FusionDebug] faces_yaml 缺少 faces 段");
-        return false;
-      }
-      for (const auto &f : root["faces"])
-      {
-        const int id = f["id"].as<int>();
-        const auto tr = f["translation"];
-        const auto rpy = f["rpy_deg"];
-        const double tx = tr[0].as<double>();
-        const double ty = tr[1].as<double>();
-        const double tz = tr[2].as<double>();
-        const double rr = rpy[0].as<double>() * M_PI / 180.0;
-        const double pp = rpy[1].as<double>() * M_PI / 180.0;
-        const double yy = rpy[2].as<double>() * M_PI / 180.0;
-        tf2::Matrix3x3 R;
-        R.setRPY(rr, pp, yy);
-        tf2::Transform T_cube_face(R, tf2::Vector3(tx, ty, tz));
-        face_to_cube_[id] = T_cube_face.inverse();
-        ROS_INFO("[FusionDebug] face %d loaded: trans[%.3f %.3f %.3f], rpy_deg[%.1f %.1f %.1f]", id, tx, ty, tz,
-                 rpy[0].as<double>(), rpy[1].as<double>(), rpy[2].as<double>());
-      }
+      const ros::Duration timeout(0.1);
+      geometry_msgs::TransformStamped tf_msg = tf_buffer_.lookupTransform(cam_frame, fused_frame_, stamp, timeout);
+      tf2::fromMsg(tf_msg.transform, out);
+      out.setRotation(normalizeQuat(out.getRotation()));
       return true;
     }
     catch (const std::exception &e)
     {
-      ROS_ERROR("[FusionDebug] faces_yaml 解析失败: %s", e.what());
+      ROS_WARN_THROTTLE(1.0, "[FusionDebug] lookupTransform failed: %s", e.what());
       return false;
     }
   }
 
-  void callback(const fiducial_msgs::FiducialTransformArray::ConstPtr &fid_msg,
-                const geometry_msgs::PoseStamped::ConstPtr &fused_msg)
+  void fiducialOnlyCallback(const fiducial_msgs::FiducialTransformArray::ConstPtr &fid_msg)
   {
+    const std::string cam_frame = !camera_frame_param_.empty() ? camera_frame_param_ : fid_msg->header.frame_id;
+    tf2::Transform fused;
+    if (!getFusedFromTf(fid_msg->header.stamp, cam_frame, fused))
+    {
+      return;
+    }
+    process(fid_msg, fused, cam_frame);
+  }
+
+  void syncedCallback(const fiducial_msgs::FiducialTransformArray::ConstPtr &fid_msg,
+                      const geometry_msgs::PoseStamped::ConstPtr &fused_msg)
+  {
+    tf2::Transform fused;
+    tf2::fromMsg(fused_msg->pose, fused);
+    fused.setRotation(normalizeQuat(fused.getRotation()));
+    const std::string cam_frame = !camera_frame_param_.empty() ? camera_frame_param_ : fused_msg->header.frame_id;
+    process(fid_msg, fused, cam_frame, fused_msg->header.stamp);
+  }
+
+  void process(const fiducial_msgs::FiducialTransformArray::ConstPtr &fid_msg, const tf2::Transform &fused,
+               const std::string &cam_frame, const ros::Time &stamp_override = ros::Time(0))
+  {
+    const ros::Time stamp = stamp_override.isZero() ? fid_msg->header.stamp : stamp_override;
     if (fid_msg->transforms.empty())
     {
-      ROS_WARN_THROTTLE(1.0, "[FusionDebug] 未检测到 fiducial，跳过");
+      ROS_WARN_THROTTLE(1.0, "[FusionDebug] No fiducials detected");
       return;
     }
 
-    tf2::Transform T_cam_cube_fused;
-    tf2::fromMsg(fused_msg->pose, T_cam_cube_fused);
-    T_cam_cube_fused.getRotation().normalize();
-    const std::string cam_frame = !camera_frame_param_.empty() ? camera_frame_param_ : fused_msg->header.frame_id;
-
-    std::vector<double> pos_errs;
-    std::vector<double> ang_errs;
+    std::vector<FaceSample> frame_faces;
+    frame_faces.reserve(fid_msg->transforms.size());
 
     for (const auto &ft : fid_msg->transforms)
     {
-      auto it = face_to_cube_.find(ft.fiducial_id);
+      const auto it = face_to_cube_.find(ft.fiducial_id);
       if (it == face_to_cube_.end())
       {
         continue;
@@ -189,81 +329,113 @@ private:
 
       tf2::Transform T_cam_face;
       tf2::fromMsg(ft.transform, T_cam_face);
-      tf2::Quaternion qf = T_cam_face.getRotation();
-      qf.normalize();
-      T_cam_face.setRotation(qf);
+      T_cam_face.setRotation(normalizeQuat(T_cam_face.getRotation()));
 
-      tf2::Transform T_cam_cube_pred = T_cam_face * it->second;
+      broadcastIfNeeded(T_cam_face, stamp, cam_frame, "tag_" + std::to_string(ft.fiducial_id), broadcast_tags_);
 
-      const tf2::Vector3 dp = T_cam_cube_pred.getOrigin() - T_cam_cube_fused.getOrigin();
+      tf2::Transform T_cam_cube = T_cam_face * it->second;
+      T_cam_cube.setRotation(normalizeQuat(T_cam_cube.getRotation()));
+
+      const tf2::Vector3 dp = T_cam_cube.getOrigin() - fused.getOrigin();
       const double pos_err = dp.length();
+      const double ang_err = angularErrorDeg(T_cam_cube.getRotation(), fused.getRotation());
 
-      tf2::Quaternion q_pred = T_cam_cube_pred.getRotation();
-      q_pred.normalize();
-      tf2::Quaternion q_fused = T_cam_cube_fused.getRotation();
-      q_fused.normalize();
-      tf2::Quaternion q_err = q_fused.inverse() * q_pred;
-      q_err.normalize();
-      const double ang_err = q_err.getAngle() * 180.0 / M_PI;
-
-      pos_errs.push_back(pos_err);
-      ang_errs.push_back(ang_err);
-
-      ROS_INFO_STREAM("[FusionDebug] face=" << ft.fiducial_id << " pos_err=" << pos_err << " m, ang_err=" << ang_err << " deg");
-
-      if (publish_predicted_pose_)
+      auto it_stat = stats_.find(ft.fiducial_id);
+      if (it_stat == stats_.end())
       {
-        auto pub = getPredPublisher(ft.fiducial_id);
-        geometry_msgs::PoseStamped pose;
-        pose.header.stamp = fused_msg->header.stamp;
-        pose.header.frame_id = cam_frame;
-        pose.pose = transformToPoseMsg(T_cam_cube_pred);
-        pub.publish(pose);
+        it_stat = stats_.emplace(ft.fiducial_id,
+                                 ErrorAccumulator(static_cast<size_t>(std::max(0, stats_window_size_))))
+                      .first;
       }
+      ErrorAccumulator &acc = it_stat->second;
+      acc.addSample(pos_err, ang_err);
+
+      const double err_raw = (ft.object_error > 0.0) ? ft.object_error : ft.image_error;
+      const double weight = (err_raw > 1e-9) ? (1.0 / err_raw) : 1.0;
+
+      FaceSample sample;
+      sample.face_id = ft.fiducial_id;
+      sample.T_cam_face = T_cam_face;
+      sample.T_cam_cube = T_cam_cube;
+      sample.pos_err = pos_err;
+      sample.ang_err_deg = ang_err;
+      sample.image_error = ft.image_error;
+      sample.object_error = ft.object_error;
+      sample.weight = weight;
+      frame_faces.push_back(sample);
+
+      broadcastIfNeeded(T_cam_cube, stamp, cam_frame, "cube_center_face_" + std::to_string(ft.fiducial_id), broadcast_faces_);
 
       if (csv_.is_open())
       {
-        csv_ << fused_msg->header.stamp.toSec() << "," << ft.fiducial_id << "," << pos_err << "," << ang_err << ","
-             << T_cam_cube_fused.getOrigin().x() << "," << T_cam_cube_fused.getOrigin().y() << "," << T_cam_cube_fused.getOrigin().z() << ","
-             << T_cam_cube_pred.getOrigin().x() << "," << T_cam_cube_pred.getOrigin().y() << "," << T_cam_cube_pred.getOrigin().z() << "\n";
+        tf2::Quaternion qf = fused.getRotation();
+        tf2::Quaternion qp = T_cam_cube.getRotation();
+        csv_ << std::fixed << std::setprecision(6) << stamp.toSec() << ',' << ft.fiducial_id << ','
+             << fused.getOrigin().x() << ',' << fused.getOrigin().y() << ',' << fused.getOrigin().z() << ','
+             << qf.x() << ',' << qf.y() << ',' << qf.z() << ',' << qf.w() << ','
+             << T_cam_cube.getOrigin().x() << ',' << T_cam_cube.getOrigin().y() << ',' << T_cam_cube.getOrigin().z() << ','
+             << qp.x() << ',' << qp.y() << ',' << qp.z() << ',' << qp.w() << ','
+             << pos_err << ',' << ang_err << ',' << ft.image_error << ',' << ft.object_error << ',' << weight << '\n';
       }
     }
 
-    if (pos_errs.empty())
+    if (frame_faces.empty())
     {
-      ROS_WARN_THROTTLE(1.0, "[FusionDebug] 没有与 faces_yaml 匹配的 fiducial，无法计算误差");
+      ROS_WARN_THROTTLE(1.0, "[FusionDebug] No faces match faces_yaml IDs");
       return;
     }
 
-    const StatResult pos_stat = computeStats(pos_errs);
-    const StatResult ang_stat = computeStats(ang_errs);
-    ROS_INFO_STREAM("[FusionDebug] 本帧统计 (faces=" << pos_errs.size() << ")\n"
-                    << "  pos_err  mean=" << pos_stat.mean << " m, rms=" << pos_stat.rms << " m, std=" << pos_stat.stddev
-                    << " m, max=" << pos_stat.max << " m\n"
-                    << "  ang_err  mean=" << ang_stat.mean << " deg, rms=" << ang_stat.rms << " deg, std="
-                    << ang_stat.stddev << " deg, max=" << ang_stat.max << " deg");
+    last_frame_faces_ = frame_faces;
+    last_fused_pose_ = fused;
+    last_cam_frame_ = cam_frame;
+    last_stamp_ = stamp;
+    has_last_frame_ = true;
 
-    if (pos_stat.max < 0.01 && ang_stat.max < 5.0)
-    {
-      ROS_INFO("[FusionDebug] 几何自洽检查通过：max(pos_err)=%.4f m, max(ang_err)=%.2f deg", pos_stat.max, ang_stat.max);
-    }
-    else
-    {
-      ROS_WARN("[FusionDebug] 几何自洽可能存在问题：max(pos_err)=%.4f m, max(ang_err)=%.2f deg", pos_stat.max, ang_stat.max);
-    }
+    broadcastIfNeeded(fused, stamp, cam_frame, fused_frame_, broadcast_fused_ && !fused_from_tf_);
   }
 
-  ros::Publisher getPredPublisher(int face_id)
+  void printTimer(const ros::TimerEvent &)
   {
-    auto it = pred_pubs_.find(face_id);
-    if (it != pred_pubs_.end())
+    if (!has_last_frame_)
     {
-      return it->second;
+      return;
     }
-    std::string topic = "/cube_center_pred/face_" + std::to_string(face_id);
-    ros::Publisher pub = nh_.advertise<geometry_msgs::PoseStamped>(topic, 1);
-    pred_pubs_[face_id] = pub;
-    return pred_pubs_[face_id];
+
+    tf2::Vector3 t = last_fused_pose_.getOrigin();
+    tf2::Quaternion q = last_fused_pose_.getRotation();
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(3);
+    oss << "[FusionDebug] fused pose (" << last_cam_frame_ << "): t=[" << t.x() << ", " << t.y() << ", " << t.z()
+        << "], q=[" << q.x() << ", " << q.y() << ", " << q.z() << ", " << q.w() << "]";
+    ROS_INFO_STREAM(oss.str());
+
+    for (const auto &sample : last_frame_faces_)
+    {
+      const auto it = stats_.find(sample.face_id);
+      StatSnapshot pos_stat;
+      StatSnapshot ang_stat;
+      if (it != stats_.end())
+      {
+        pos_stat = it->second.snapshotPos();
+        ang_stat = it->second.snapshotAng();
+      }
+
+      const tf2::Vector3 tp = sample.T_cam_cube.getOrigin();
+      const tf2::Quaternion qp = sample.T_cam_cube.getRotation();
+
+      std::ostringstream line;
+      line << std::fixed << std::setprecision(3);
+      line << "[FusionDebug] face=" << sample.face_id
+           << " pos_err=" << sample.pos_err << " m, ang_err=" << sample.ang_err_deg << " deg"
+           << " | cube_from_face t=[" << tp.x() << ", " << tp.y() << ", " << tp.z() << "]"
+           << " q=[" << qp.x() << ", " << qp.y() << ", " << qp.z() << ", " << qp.w() << "]";
+      if (pos_stat.count > 0)
+      {
+        line << " | stats pos(mean/rms/max)= " << pos_stat.mean << "/" << pos_stat.rms << "/" << pos_stat.max
+             << " m, ang(mean/rms/max)= " << ang_stat.mean << "/" << ang_stat.rms << "/" << ang_stat.max;
+      }
+      ROS_INFO_STREAM(line.str());
+    }
   }
 
   ros::NodeHandle nh_;
@@ -271,21 +443,37 @@ private:
 
   std::string faces_yaml_path_;
   std::string fiducial_topic_;
-  std::string fused_topic_;
-  std::string cube_frame_;
+  std::string fused_pose_topic_;
+  std::string fused_frame_;
   std::string camera_frame_param_;
-  std::string output_csv_path_;
-  bool publish_predicted_pose_{true};
-  double sync_slop_sec_{0.03};
+  bool fused_from_tf_{false};
+  double print_rate_hz_{10.0};
+  std::string csv_path_;
+  int stats_window_size_{0};
+  bool broadcast_tags_{true};
+  bool broadcast_faces_{true};
+  bool broadcast_fused_{true};
 
   std::map<int, tf2::Transform> face_to_cube_;
-  std::map<int, ros::Publisher> pred_pubs_;
+  std::map<int, ErrorAccumulator> stats_;
 
-  message_filters::Subscriber<fiducial_msgs::FiducialTransformArray> fid_sub_;
-  message_filters::Subscriber<geometry_msgs::PoseStamped> fused_sub_;
-  message_filters::Synchronizer<SyncPolicy> sync_;
+  tf2_ros::TransformBroadcaster tf_broadcaster_;
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
 
+  std::unique_ptr<message_filters::Subscriber<fiducial_msgs::FiducialTransformArray>> fid_sub_;
+  std::unique_ptr<message_filters::Subscriber<geometry_msgs::PoseStamped>> fused_sub_;
+  std::unique_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
+  ros::Subscriber fiducial_sub_tf_;
+
+  ros::Timer print_timer_;
   std::ofstream csv_;
+
+  tf2::Transform last_fused_pose_;
+  std::string last_cam_frame_;
+  ros::Time last_stamp_;
+  std::vector<FaceSample> last_frame_faces_;
+  bool has_last_frame_{false};
 };
 
 int main(int argc, char **argv)
@@ -298,13 +486,12 @@ int main(int argc, char **argv)
   {
     CubeFusionDebugNode node(nh, pnh);
     ros::spin();
+    return 0;
   }
   catch (const std::exception &e)
   {
-    ROS_FATAL("[FusionDebug] 节点启动失败: %s", e.what());
+    ROS_FATAL("[FusionDebug] Failed to start: %s", e.what());
     return 1;
   }
-
-  return 0;
 }
 

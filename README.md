@@ -172,7 +172,7 @@
 - **world_robot_calib_motion_node.cpp**：按 CSV 轨迹驱动机器人做自动标定位姿，调用 `/jaka_driver/linear_move` 发送笛卡尔轨迹；输入：轨迹 CSV；输出：机器人运动和采样触发。
 - **world_robot_extrinsic_broadcaster_node.cpp**：从 YAML 读取 `world -> base` 外参并周期性广播 TF，供闭环/调试使用。
 - **cube_world_closedloop_node.cpp**：在闭环阶段计算 `base -> cube` 目标与观察值，打印或发布用于控制的位姿；输入：`world -> camera`、`world -> base` TF 与 `/cube_center_fused`。
-- **cube_fusion_debug_node.cpp**：调试多面融合质量，逐面反推 `cube_center` 与融合结果对比，输出误差统计与可选 CSV。
+- **cube_fusion_debug_node.cpp**：调试多面融合质量，逐面反推 `cube_center` 与融合结果对比，发布 `tag_*` / `cube_center_face_*` / `cube_center_fused` TF，输出滑动窗 mean/rms/max 误差统计与可选 CSV。
 - **cube_nominal_compare_node.cpp**：对比机器人理论 `base -> cube` 与视觉测量，输出 pos/ang 残差统计，并可发布 `/cube_center_nominal` 供 RViz。
 - **closed_loop_control_node.cpp**：示例闭环控制器，结合已标定外参与实时视觉，计算并调用 `/jaka_driver/joint_move` 或自定义接口实现闭环移动。
 

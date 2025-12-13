@@ -177,3 +177,7 @@ add_dependencies(cube_nominal_compare_node ${${PROJECT_NAME}_EXPORTED_TARGETS} $
 install(DIRECTORY launch config rviz
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
+
+install(DIRECTORY include/
+  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
+)

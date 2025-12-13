@@ -5,6 +5,12 @@
   <arg name="faces_yaml" default="$(find jaka_close_contro)/config/cube_faces_current.yaml" />
   <arg name="tool_offset_yaml" default="$(find jaka_close_contro)/config/tool_offset_current.yaml" />
   <arg name="output_csv" default="$(find jaka_close_contro)/config/cube_fusion_debug.csv" />
+  <arg name="stats_window" default="0" />
+  <arg name="print_rate" default="10.0" />
+  <arg name="fused_from_tf" default="false" />
+  <arg name="camera_frame" default="" />
+  <arg name="fused_pose_topic" default="/cube_center_fused" />
+  <arg name="fused_frame" default="cube_center_fused" />
 
   <!-- 1. ZED2i 相机 -->
   <include file="$(find zed_wrapper)/launch/zed2i.launch">
@@ -53,11 +59,13 @@
   <node pkg="jaka_close_contro" type="cube_fusion_debug_node" name="cube_fusion_debug" output="screen">
     <param name="faces_yaml"      value="$(arg faces_yaml)" />
     <param name="fiducial_topic"  value="/tool_fiducials" />
-    <param name="fused_topic"     value="/cube_center_fused" />
-    <param name="cube_frame"      value="cube_center" />
-    <param name="output_csv"      value="$(arg output_csv)" />
-    <param name="sync_slop_sec"   value="0.03" />
-    <param name="publish_predicted_pose" value="true" />
+    <param name="fused_pose_topic" value="$(arg fused_pose_topic)" />
+    <param name="camera_frame" value="$(arg camera_frame)" />
+    <param name="fused_frame" value="$(arg fused_frame)" />
+    <param name="fused_from_tf" value="$(arg fused_from_tf)" />
+    <param name="csv_path"      value="$(arg output_csv)" />
+    <param name="print_rate"    value="$(arg print_rate)" />
+    <param name="stats_window"  value="$(arg stats_window)" />
   </node>
 
 </launch>
