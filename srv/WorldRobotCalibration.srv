@@ -1,0 +1,18 @@
+# Request
+---
+# Response
+bool success
+string message
+
+# world -> robot_base extrinsic
+geometry_msgs/Vector3 translation
+geometry_msgs/Quaternion rotation
+
+# Residual statistics
+float64 position_rmse_m
+float64 orientation_rmse_deg
+float64 extrinsic_pos_rmse_m
+float64 extrinsic_rot_rmse_deg
+
+# flange/tool -> cube_center extrinsic
+geometry_msgs/Pose tool_extrinsic
