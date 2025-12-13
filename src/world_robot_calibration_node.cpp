@@ -59,9 +59,11 @@ private:
     
     tf2_ros::Buffer tf_buffer_;
     tf2_ros::TransformListener tf_listener_;
-    
+
     std::vector<Eigen::Matrix4d> robot_poses_;  // 机械臂末端位姿（相对于基座）
     std::vector<Eigen::Matrix4d> cube_poses_in_world_; // 立方体在世界坐标系中的位姿
+    std::vector<Eigen::Vector3d> base_tool_positions_;
+    std::vector<Eigen::Quaterniond> base_tool_rotations_;
     
     geometry_msgs::PoseStamped current_cube_pose_;
     sensor_msgs::JointState current_joint_state_;
@@ -115,6 +117,14 @@ private:
             
             // 获取机械臂末端在基座坐标系中的位姿（从关节角度计算）
             Eigen::Matrix4d T_robot_base_tool = calculateRobotPose(current_joint_state_);
+
+            // 保存 base -> tool 的样本
+            Eigen::Vector3d p_bt = T_robot_base_tool.block<3,1>(0,3);
+            Eigen::Matrix3d R_bt = T_robot_base_tool.block<3,3>(0,0);
+            Eigen::Quaterniond q_bt(R_bt);
+            q_bt.normalize();
+            base_tool_positions_.push_back(p_bt);
+            base_tool_rotations_.push_back(q_bt);
             
             // 存储数据
             robot_poses_.push_back(T_robot_base_tool);
@@ -161,6 +171,8 @@ private:
         // 清空数据
         robot_poses_.clear();
         cube_poses_in_world_.clear();
+        base_tool_positions_.clear();
+        base_tool_rotations_.clear();
         
         res.success = true;
         res.message = "World-robot calibration completed";

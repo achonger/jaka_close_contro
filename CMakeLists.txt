@@ -10,6 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   sensor_msgs
   geometry_msgs
+  message_generation
   tf2
   tf2_ros
   tf2_geometry_msgs
@@ -24,13 +25,26 @@ find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(Ceres REQUIRED)
 
+add_service_files(
+  FILES
+    JointMove.srv
+    WorldRobotCalibration.srv
+)
+
+generate_messages(
+  DEPENDENCIES
+    geometry_msgs
+    std_msgs
+)
+
 catkin_package(
-  CATKIN_DEPENDS 
-    roscpp 
-    sensor_msgs 
-    geometry_msgs 
-    tf2 
-    tf2_ros 
+  CATKIN_DEPENDS
+    roscpp
+    sensor_msgs
+    geometry_msgs
+    message_runtime
+    tf2
+    tf2_ros
     tf2_geometry_msgs
     cv_bridge 
     fiducial_msgs 
