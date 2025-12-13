@@ -29,3 +29,6 @@ float64 extrinsic_rot_rmse_deg
 float64 extrinsic_rot_mean_deg
 float64 extrinsic_rot_std_deg
 float64 extrinsic_rot_max_deg
+
+# 法兰（tool_frame=Link_6）到立方体中心的外参
+geometry_msgs/Pose tool_extrinsic

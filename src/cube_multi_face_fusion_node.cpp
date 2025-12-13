@@ -486,24 +486,6 @@ private:
       return;
     }
 
-    // 单面保护：与上一帧差异过大则保持上一帧
-    if (obs.size() == 1 && has_prev_)
-    {
-      tf2::Transform T_single = toTf2(obs[0].t, obs[0].q);
-      tf2::Vector3 dp = T_single.getOrigin() - prev_.getOrigin();
-      double pos_diff = dp.length();
-      tf2::Quaternion dq = prev_.getRotation().inverse() * T_single.getRotation();
-      dq.normalize();
-      double ang = dq.getAngle();
-      if (ang > gate_ang_single_deg_ * M_PI / 180.0 || pos_diff > gate_pos_single_m_)
-      {
-        ROS_WARN("[Fusion] HOLD_LAST_GOOD (single face %d): pos jump %.3f m, ang jump %.1f deg",
-                 obs[0].face_id, pos_diff, ang * 180.0 / M_PI);
-        publish(prev_, msg->header.stamp, msg->header.frame_id.empty() ? camera_frame_default_ : msg->header.frame_id);
-        return;
-      }
-    }
-
     FuseResult fused = robustFuseSE3(obs);
 
     auto publishStats = [&](const tf2::Transform &T_use) {
