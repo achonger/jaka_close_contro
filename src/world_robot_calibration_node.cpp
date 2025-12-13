@@ -6,6 +6,8 @@
 #include <tf2_ros/transform_listener.h>
 #include <fstream>
 #include <vector>
+#include <map>
+#include <algorithm>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <cmath>
@@ -45,8 +47,15 @@ public:
       cube_offset_ = Eigen::Vector3d(0.0, 0.0, offset_z);
     }
 
-    const std::string default_output = ros::package::getPath("jaka_close_contro") + "/config/world_robot_extrinsic.yaml";
+    const std::string base_path = ros::package::getPath("jaka_close_contro");
+    const std::string default_output = base_path + "/config/world_robot_extrinsic.yaml";
+    const std::string default_faces_output = base_path + "/config/cube_faces_current.yaml";
+    const std::string default_tool_output = base_path + "/config/tool_offset_current.yaml";
+    const std::string default_faces_input = base_path + "/config/cube_faces_ideal.yaml";
     pnh.param<std::string>("output_yaml", output_yaml_path_, default_output);
+    pnh.param<std::string>("faces_output_yaml", faces_output_yaml_path_, default_faces_output);
+    pnh.param<std::string>("tool_offset_output_yaml", tool_offset_output_yaml_path_, default_tool_output);
+    pnh.param<std::string>("faces_input_yaml", faces_input_yaml_path_, default_faces_input);
 
     cube_sub_ = nh.subscribe(cube_topic_, 1, &WorldRobotCalibrationNode::cubeCallback, this);
     stats_sub_ = nh.subscribe(stats_topic_, 1, &WorldRobotCalibrationNode::statsCallback, this);
@@ -58,8 +67,12 @@ public:
              world_frame_.c_str(), robot_base_frame_.c_str(), tool_frame_.c_str(), camera_frame_.c_str(), cube_frame_.c_str());
     ROS_INFO("[WorldRobot] 立方体偏移（法兰系）= [%.3f, %.3f, %.3f] m", cube_offset_.x(), cube_offset_.y(), cube_offset_.z());
     ROS_INFO("[WorldRobot] 输出 YAML: %s", output_yaml_path_.c_str());
+    ROS_INFO("[WorldRobot] faces_input=%s, faces_output=%s, tool_offset_output=%s", faces_input_yaml_path_.c_str(),
+             faces_output_yaml_path_.c_str(), tool_offset_output_yaml_path_.c_str());
 
     loadExistingCalibration();
+
+    loadFacesYaml();
 
     if (publish_tf_)
     {
@@ -75,6 +88,13 @@ private:
   tf2_ros::TransformListener tf_listener_;
   tf2_ros::TransformBroadcaster tf_broadcaster_;
   ros::Timer tf_timer_;
+
+  struct FaceParam
+  {
+    int id;
+    Eigen::Vector3d t;
+    Eigen::Vector3d rpy; // rad
+  };
 
   struct ResidualStats
   {
@@ -214,6 +234,9 @@ private:
   std::string cube_topic_;
   std::string stats_topic_;
   std::string output_yaml_path_;
+  std::string faces_output_yaml_path_;
+  std::string tool_offset_output_yaml_path_;
+  std::string faces_input_yaml_path_;
   int min_samples_ = 10;
   bool publish_tf_ = false;
 
@@ -221,6 +244,8 @@ private:
 
   bool has_solution_ = false;
   geometry_msgs::TransformStamped solution_tf_;
+
+  std::map<int, FaceParam> faces_;
 
   void cubeCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
   {
@@ -494,6 +519,16 @@ private:
 
     const ResidualStats stats = computeResidualStats(T_WB_est, T_FC_est);
 
+    writeToolOffsetYaml(tool_offset_output_yaml_path_, T_FC_est);
+    if (!faces_.empty())
+    {
+      writeCubeFacesYaml(faces_output_yaml_path_, faces_);
+    }
+    else
+    {
+      ROS_WARN("[WorldRobot] 未加载面信息，跳过面配置写出");
+    }
+
     res.position_rmse_m = stats.position_rmse_m;
     res.position_mean_m = stats.position_mean_m;
     res.position_std_m = stats.position_std_m;
@@ -636,6 +671,114 @@ private:
     catch (const std::exception &e)
     {
       ROS_ERROR("[WorldRobot] 保存标定文件失败: %s", e.what());
+    }
+  }
+
+  bool loadFacesYaml()
+  {
+    try
+    {
+      YAML::Node root = YAML::LoadFile(faces_input_yaml_path_);
+      if (!root["faces"])
+      {
+        ROS_WARN("[WorldRobot] faces_input_yaml 缺少 faces 字段: %s", faces_input_yaml_path_.c_str());
+        return false;
+      }
+
+      faces_.clear();
+      for (const auto &f : root["faces"])
+      {
+        if (!f["id"] || !f["translation"] || !f["rpy_deg"])
+        {
+          ROS_WARN("[WorldRobot] faces_input_yaml 条目缺字段，跳过一项");
+          continue;
+        }
+        FaceParam fp;
+        fp.id = f["id"].as<int>();
+        auto tr = f["translation"];
+        auto rpy = f["rpy_deg"];
+        fp.t = Eigen::Vector3d(tr[0].as<double>(), tr[1].as<double>(), tr[2].as<double>());
+        fp.rpy = Eigen::Vector3d(rpy[0].as<double>() * M_PI / 180.0,
+                                 rpy[1].as<double>() * M_PI / 180.0,
+                                 rpy[2].as<double>() * M_PI / 180.0);
+        faces_[fp.id] = fp;
+      }
+
+      ROS_INFO("[WorldRobot] 已加载 %zu 个面定义用于输出: %s", faces_.size(), faces_input_yaml_path_.c_str());
+      return !faces_.empty();
+    }
+    catch (const std::exception &e)
+    {
+      ROS_WARN("[WorldRobot] faces_input_yaml 读取失败: %s", e.what());
+      return false;
+    }
+  }
+
+  void writeToolOffsetYaml(const std::string &path, const tf2::Transform &T_fc)
+  {
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "tool_offset" << YAML::Value;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "translation" << YAML::Value << YAML::Flow << YAML::BeginSeq << T_fc.getOrigin().x()
+            << T_fc.getOrigin().y() << T_fc.getOrigin().z() << YAML::EndSeq;
+    emitter << YAML::Key << "rotation" << YAML::Value << YAML::Flow << YAML::BeginSeq << T_fc.getRotation().x()
+            << T_fc.getRotation().y() << T_fc.getRotation().z() << T_fc.getRotation().w() << YAML::EndSeq;
+    emitter << YAML::EndMap;
+    emitter << YAML::EndMap;
+
+    try
+    {
+      std::ofstream fout(path);
+      fout << emitter.c_str();
+      fout.close();
+      ROS_INFO("[WorldRobot] 已写入工具外参: %s", path.c_str());
+    }
+    catch (const std::exception &e)
+    {
+      ROS_ERROR("[WorldRobot] 写入工具外参失败: %s", e.what());
+    }
+  }
+
+  void writeCubeFacesYaml(const std::string &path, const std::map<int, FaceParam> &faces)
+  {
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "faces" << YAML::Value << YAML::BeginSeq;
+
+    std::vector<int> ids;
+    ids.reserve(faces.size());
+    for (const auto &kv : faces)
+    {
+      ids.push_back(kv.first);
+    }
+    std::sort(ids.begin(), ids.end());
+
+    for (int id : ids)
+    {
+      const FaceParam &fp = faces.at(id);
+      emitter << YAML::BeginMap;
+      emitter << YAML::Key << "id" << YAML::Value << fp.id;
+      emitter << YAML::Key << "translation" << YAML::Value << YAML::Flow << YAML::BeginSeq << fp.t.x() << fp.t.y()
+              << fp.t.z() << YAML::EndSeq;
+      emitter << YAML::Key << "rpy_deg" << YAML::Value << YAML::Flow << YAML::BeginSeq << fp.rpy.x() * 180.0 / M_PI
+              << fp.rpy.y() * 180.0 / M_PI << fp.rpy.z() * 180.0 / M_PI << YAML::EndSeq;
+      emitter << YAML::EndMap;
+    }
+
+    emitter << YAML::EndSeq;
+    emitter << YAML::EndMap;
+
+    try
+    {
+      std::ofstream fout(path);
+      fout << emitter.c_str();
+      fout.close();
+      ROS_INFO("[WorldRobot] 已写入面配置: %s", path.c_str());
+    }
+    catch (const std::exception &e)
+    {
+      ROS_ERROR("[WorldRobot] 写入面配置失败: %s", e.what());
     }
   }
 

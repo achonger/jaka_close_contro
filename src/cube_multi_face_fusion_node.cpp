@@ -9,6 +9,7 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include <yaml-cpp/yaml.h>
+#include <ros/package.h>
 
 #include <jaka_close_contro/CubeFusionStats.h>
 
@@ -50,7 +51,10 @@ public:
         tf_listener_(tf_buffer_),
         tf_broadcaster_()
   {
-    pnh_.param<std::string>("faces_yaml", faces_yaml_path_, "");
+    const std::string default_faces_yaml = ros::package::getPath("jaka_close_contro") + "/config/cube_faces_current.yaml";
+    const std::string default_tool_offset_yaml = ros::package::getPath("jaka_close_contro") + "/config/tool_offset_current.yaml";
+    pnh_.param<std::string>("faces_yaml", faces_yaml_path_, default_faces_yaml);
+    pnh_.param<std::string>("tool_offset_yaml", tool_offset_yaml_path_, default_tool_offset_yaml);
     pnh_.param<std::string>("fiducial_topic", fiducial_topic_, "/tool_fiducials");
     pnh_.param<std::string>("camera_frame_default", camera_frame_default_, "zed2i_left_camera_optical_frame");
     pnh_.param<std::string>("cube_frame", cube_frame_, "cube_center");
@@ -78,6 +82,13 @@ public:
     if (faces_yaml_path_.empty() || !loadFacesYaml(faces_yaml_path_))
     {
       ROS_ERROR("[Fusion] Failed to load faces YAML. Exiting.");
+      ros::shutdown();
+      return;
+    }
+
+    if (!loadToolOffsetYaml(tool_offset_yaml_path_))
+    {
+      ROS_ERROR("[Fusion] Failed to load tool_offset YAML. Exiting.");
       ros::shutdown();
       return;
     }
@@ -125,33 +136,48 @@ private:
                  rpy[0].as<double>(), rpy[1].as<double>(), rpy[2].as<double>());
       }
 
-      if (root["tool_offset"])
-      {
-        auto to = root["tool_offset"];
-        auto trans = to["translation"];
-        double tx = trans[0].as<double>();
-        double ty = trans[1].as<double>();
-        double tz = trans[2].as<double>();
-
-        tool_offset_.setOrigin(tf2::Vector3(tx, ty, tz));
-        tool_offset_.setRotation(tf2::Quaternion(0, 0, 0, 1));
-        has_tool_offset_ = true;
-
-        ROS_INFO("[Fusion] Tool offset loaded: trans=[%.3f,%.3f,%.3f]", tx, ty, tz);
-      }
-      else
-      {
-        ROS_WARN("[Fusion] No 'tool_offset' in YAML. Using default [0,0,0.077]");
-        tool_offset_.setOrigin(tf2::Vector3(0, 0, 0.077));
-        tool_offset_.setRotation(tf2::Quaternion(0, 0, 0, 1));
-        has_tool_offset_ = true;
-      }
-
       return true;
     }
     catch (const std::exception &e)
     {
       ROS_ERROR("[Fusion] YAML load error: %s", e.what());
+      return false;
+    }
+  }
+
+  bool loadToolOffsetYaml(const std::string &path)
+  {
+    try
+    {
+      ROS_INFO("[Fusion] Loading tool offset YAML: %s", path.c_str());
+      YAML::Node root = YAML::LoadFile(path);
+      if (!root["tool_offset"] || !root["tool_offset"]["translation"] || !root["tool_offset"]["rotation"])
+      {
+        ROS_ERROR("[Fusion] tool_offset YAML 缺少必要字段");
+        return false;
+      }
+
+      auto trans = root["tool_offset"]["translation"];
+      auto rot = root["tool_offset"]["rotation"];
+      if (trans.size() != 3 || rot.size() != 4)
+      {
+        ROS_ERROR("[Fusion] tool_offset YAML 长度不匹配");
+        return false;
+      }
+
+      tool_offset_.setOrigin(tf2::Vector3(trans[0].as<double>(), trans[1].as<double>(), trans[2].as<double>()));
+      tf2::Quaternion q(rot[0].as<double>(), rot[1].as<double>(), rot[2].as<double>(), rot[3].as<double>());
+      q.normalize();
+      tool_offset_.setRotation(q);
+      has_tool_offset_ = true;
+
+      ROS_INFO("[Fusion] Tool offset loaded: trans=[%.3f, %.3f, %.3f], quat=[%.3f, %.3f, %.3f, %.3f]", trans[0].as<double>(),
+               trans[1].as<double>(), trans[2].as<double>(), q.x(), q.y(), q.z(), q.w());
+      return true;
+    }
+    catch (const std::exception &e)
+    {
+      ROS_ERROR("[Fusion] 读取 tool_offset YAML 失败: %s", e.what());
       return false;
     }
   }
@@ -615,6 +641,7 @@ private:
   bool has_tool_offset_;
 
   std::string faces_yaml_path_;
+  std::string tool_offset_yaml_path_;
   std::string fiducial_topic_;
   std::string camera_frame_default_;
   std::string cube_frame_;

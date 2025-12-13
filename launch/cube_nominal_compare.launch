@@ -5,7 +5,7 @@
   <arg name="urdf_file" default="$(find jaka_close_contro)/urdf/jaka_zu3.urdf" />
   <arg name="faces_yaml" default="$(find jaka_close_contro)/config/cube_faces_current.yaml" />
   <arg name="extrinsic_yaml" default="$(find jaka_close_contro)/config/world_robot_extrinsic.yaml" />
-  <arg name="tool_to_cube_z" default="0.077" />
+  <arg name="tool_offset_yaml" default="$(find jaka_close_contro)/config/tool_offset_current.yaml" />
   <arg name="output_csv" default="$(find jaka_close_contro)/config/cube_nominal_compare.csv" />
 
   <!-- 0. 官方驱动 + TF 发布（含 /jaka_driver/linear_move 与 /joint_states） -->
@@ -25,6 +25,7 @@
   <!-- 4. 相机与 ArUco 检测/分流/世界板定义/多面融合 -->
   <include file="$(find jaka_close_contro)/launch/cube_fusion_debug.launch">
     <arg name="faces_yaml" value="$(arg faces_yaml)" />
+    <arg name="tool_offset_yaml" value="$(arg tool_offset_yaml)" />
     <arg name="output_csv" value="" />
   </include>
 
@@ -45,8 +46,7 @@
     <param name="camera_frame" value="zed2i_left_camera_optical_frame" />
     <param name="cube_frame" value="cube_center" />
     <param name="cube_topic" value="/cube_center_fused" />
-    <rosparam param="tool_to_cube_translation">[0.0, 0.0, $(arg tool_to_cube_z)]</rosparam>
-    <rosparam param="tool_to_cube_rpy_deg">[0.0, 0.0, 0.0]</rosparam>
+    <param name="tool_offset_yaml" value="$(arg tool_offset_yaml)" />
     <param name="output_csv" value="$(arg output_csv)" />
   </node>
 

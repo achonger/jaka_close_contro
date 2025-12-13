@@ -39,10 +39,10 @@ public:
     pnh_.param<std::string>("extrinsic_yaml", extrinsic_yaml_, default_yaml);
     const std::string default_joint_csv = ros::package::getPath("jaka_close_contro") + "/config/joint_calib_samples.csv";
     pnh_.param<std::string>("joint_sample_csv", joint_sample_csv_, default_joint_csv);
-    const std::string default_cube_faces_template = ros::package::getPath("jaka_close_contro") + "/config/cube_faces_ideal.yaml";
     const std::string default_cube_faces_output = ros::package::getPath("jaka_close_contro") + "/config/cube_faces_current.yaml";
-    pnh_.param<std::string>("cube_faces_yaml_template", cube_faces_yaml_template_, default_cube_faces_template);
-    pnh_.param<std::string>("cube_faces_yaml_output", cube_faces_yaml_output_, default_cube_faces_output);
+    const std::string default_tool_offset_output = ros::package::getPath("jaka_close_contro") + "/config/tool_offset_current.yaml";
+    pnh_.param<std::string>("faces_output_yaml", faces_output_yaml_, default_cube_faces_output);
+    pnh_.param<std::string>("tool_offset_output_yaml", tool_offset_output_yaml_, default_tool_offset_output);
 
     // 重置上一轮的 CSV 记录，防止残留导致统计混淆
     std::ofstream(joint_sample_csv_, std::ios::out | std::ios::trunc).close();
@@ -99,8 +99,8 @@ private:
   int min_samples_ = 16;
   bool auto_solve_ = true;
   std::string extrinsic_yaml_;
-  std::string cube_faces_yaml_template_;
-  std::string cube_faces_yaml_output_;
+  std::string faces_output_yaml_;
+  std::string tool_offset_output_yaml_;
   jaka_close_contro::WorldRobotCalibration::Response latest_result_;
 
   void cubeCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
@@ -395,45 +395,6 @@ private:
       ROS_ERROR("[AutoCalib] 保存外参失败：%s", e.what());
     }
 
-    try
-    {
-      YAML::Node node = YAML::LoadFile(cube_faces_yaml_template_);
-      YAML::Node tool_offset = node["tool_offset"];
-      if (!tool_offset)
-      {
-        tool_offset = node["tool_offset"] = YAML::Node(YAML::NodeType::Map);
-      }
-
-      YAML::Node translation = tool_offset["translation"];
-      if (!translation || !translation.IsSequence())
-      {
-        translation = tool_offset["translation"] = YAML::Node(YAML::NodeType::Sequence);
-      }
-      translation[0] = res.tool_extrinsic.position.x;
-      translation[1] = res.tool_extrinsic.position.y;
-      translation[2] = res.tool_extrinsic.position.z;
-
-      YAML::Node rotation = tool_offset["rotation"];
-      if (!rotation || !rotation.IsSequence())
-      {
-        rotation = tool_offset["rotation"] = YAML::Node(YAML::NodeType::Sequence);
-      }
-      rotation[0] = res.tool_extrinsic.orientation.x;
-      rotation[1] = res.tool_extrinsic.orientation.y;
-      rotation[2] = res.tool_extrinsic.orientation.z;
-      rotation[3] = res.tool_extrinsic.orientation.w;
-
-      YAML::Emitter cube_emitter;
-      cube_emitter << node;
-      std::ofstream fout(cube_faces_yaml_output_);
-      fout << cube_emitter.c_str();
-      fout.close();
-      ROS_INFO("[AutoCalib] 已更新立方体配置：%s", cube_faces_yaml_output_.c_str());
-    }
-    catch (const std::exception &e)
-    {
-      ROS_ERROR("[AutoCalib] 保存立方体配置失败：%s", e.what());
-    }
   }
 };
 

@@ -51,6 +51,7 @@
   <!-- 5. 末端正方体多面融合（仅发布 camera->cube_center，关闭视觉末端 TF） -->
   <node pkg="jaka_close_contro" type="cube_multi_face_fusion_node" name="cube_multi_face_fusion" output="screen">
     <param name="faces_yaml" value="$(find jaka_close_contro)/config/cube_faces_current.yaml" />
+    <param name="tool_offset_yaml" value="$(find jaka_close_contro)/config/tool_offset_current.yaml" />
     <param name="fiducial_topic" value="/tool_fiducials" />
     <param name="cube_frame" value="cube_center" />
     <param name="camera_frame_default" value="zed2i_left_camera_optical_frame" />
@@ -78,7 +79,7 @@
     <param name="camera_frame" value="zed2i_left_camera_optical_frame" />
     <param name="robot_base_frame" value="Link_0" />
     <param name="tool_frame" value="Link_6" />
-    <param name="cube_offset_z_m" value="0.077" />
+    <param name="tool_offset_yaml" value="$(find jaka_close_contro)/config/tool_offset_current.yaml" />
     <!-- 如需设定目标位姿，可在此添加 target_world_* 参数 -->
   </node>
 </launch>

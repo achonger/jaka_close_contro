@@ -5,6 +5,9 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2/LinearMath/Transform.h>
 #include <tf2/LinearMath/Quaternion.h>
+#include <yaml-cpp/yaml.h>
+#include <ros/package.h>
+#include <stdexcept>
 
 class CubeWorldClosedLoopNode {
 public:
@@ -14,8 +17,11 @@ public:
     pnh.param<std::string>("camera_frame", camera_frame_, std::string("zed2i_left_camera_optical_frame"));
     pnh.param<std::string>("robot_base_frame", robot_base_frame_, std::string("Link_0"));
     pnh.param<std::string>("tool_frame", tool_frame_, std::string("Link_6"));
-    pnh.param<double>("cube_offset_z_m", cube_offset_z_m_, 0.077);
     pnh.param<std::string>("cube_topic", cube_topic_, std::string("/cube_center_fused"));
+
+    const std::string default_tool_offset_yaml = ros::package::getPath("jaka_close_contro") + "/config/tool_offset_current.yaml";
+    pnh.param<std::string>("tool_offset_yaml", tool_offset_yaml_, default_tool_offset_yaml);
+    loadToolOffset();
 
     double target_x = target_pos_world_.x();
     double target_y = target_pos_world_.y();
@@ -42,8 +48,8 @@ public:
     ROS_INFO("[CubeWorld] 节点已启动");
     ROS_INFO("[CubeWorld] world_frame=%s, cube_frame=%s, camera_frame=%s", world_frame_.c_str(), cube_frame_.c_str(),
              camera_frame_.c_str());
-    ROS_INFO("[CubeWorld] robot_base_frame=%s, tool_frame=%s, cube_offset_z=%.3f m", robot_base_frame_.c_str(),
-             tool_frame_.c_str(), cube_offset_z_m_);
+    ROS_INFO("[CubeWorld] robot_base_frame=%s, tool_frame=%s, tool_offset_yaml=%s", robot_base_frame_.c_str(),
+             tool_frame_.c_str(), tool_offset_yaml_.c_str());
     ROS_INFO_STREAM("[CubeWorld] 目标世界位姿: pos = (" << target_pos_world_.x() << ", " << target_pos_world_.y() << ", "
                     << target_pos_world_.z() << ")"
                     << ", quat = (" << target_quat_world_.x() << ", " << target_quat_world_.y() << ", "
@@ -62,7 +68,8 @@ private:
   std::string tool_frame_;
   std::string cube_topic_;
 
-  double cube_offset_z_m_;
+  std::string tool_offset_yaml_;
+  tf2::Transform tool_offset_;
   tf2::Vector3 target_pos_world_{0.0, 0.0, 0.0};
   tf2::Quaternion target_quat_world_{0.0, 0.0, 0.0, 1.0};
 
@@ -82,6 +89,30 @@ private:
     pose.position.z = tf.getOrigin().z();
     pose.orientation = tf2::toMsg(tf.getRotation());
     return pose;
+  }
+
+  void loadToolOffset() {
+    try {
+      YAML::Node root = YAML::LoadFile(tool_offset_yaml_);
+      if (!root["tool_offset"] || !root["tool_offset"]["translation"] || !root["tool_offset"]["rotation"]) {
+        throw std::runtime_error("tool_offset 缺少 translation/rotation");
+      }
+      auto trans = root["tool_offset"]["translation"];
+      auto rot = root["tool_offset"]["rotation"];
+      if (trans.size() != 3 || rot.size() != 4) {
+        throw std::runtime_error("tool_offset translation/rotation 尺寸不正确");
+      }
+      tf2::Quaternion q(rot[0].as<double>(), rot[1].as<double>(), rot[2].as<double>(), rot[3].as<double>());
+      q.normalize();
+      tool_offset_.setOrigin(tf2::Vector3(trans[0].as<double>(), trans[1].as<double>(), trans[2].as<double>()));
+      tool_offset_.setRotation(q);
+      ROS_INFO("[CubeWorld] 已加载 tool_offset: trans[%.3f %.3f %.3f], quat[%.3f %.3f %.3f %.3f]", trans[0].as<double>(),
+               trans[1].as<double>(), trans[2].as<double>(), q.x(), q.y(), q.z(), q.w());
+    } catch (const std::exception& e) {
+      tool_offset_.setOrigin(tf2::Vector3(0.0, 0.0, 0.077));
+      tool_offset_.setRotation(tf2::Quaternion::getIdentity());
+      ROS_WARN("[CubeWorld] 读取 tool_offset_yaml 失败 (%s)，使用默认 [0,0,0.077]", e.what());
+    }
   }
 
   bool lookupTransform(const std::string& target, const std::string& source, const ros::Time& stamp,
@@ -137,11 +168,7 @@ private:
     T_w_cube_target.setOrigin(target_pos_world_);
     T_w_cube_target.setRotation(target_quat_world_);
 
-    tf2::Transform T_tool_cube;
-    T_tool_cube.setOrigin(tf2::Vector3(0.0, 0.0, cube_offset_z_m_));
-    T_tool_cube.setRotation(tf2::Quaternion::getIdentity());
-
-    tf2::Transform T_b_tool_target = T_w_b.inverse() * T_w_cube_target * T_tool_cube.inverse();
+    tf2::Transform T_b_tool_target = T_w_b.inverse() * T_w_cube_target * tool_offset_.inverse();
     geometry_msgs::Pose target_pose_base = tfToPose(T_b_tool_target);
 
     ROS_DEBUG_STREAM_THROTTLE(0.5, "[CubeWorld] 期望末端 (base系): pos=(" << target_pose_base.position.x << ", "
