@@ -123,6 +123,7 @@ target_link_libraries(world_robot_extrinsic_broadcaster_node
 add_executable(cube_world_closedloop_node src/cube_world_closedloop_node.cpp)
 target_link_libraries(cube_world_closedloop_node
   ${catkin_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
   ${EIGEN3_LIBRARIES}
 )
 
