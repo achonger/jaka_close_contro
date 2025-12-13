@@ -27,6 +27,7 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(Ceres REQUIRED)
 
 add_message_files(FILES
   CubeFusionStats.msg
@@ -70,6 +71,7 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${YAML_CPP_INCLUDE_DIR}
+  ${CERES_INCLUDE_DIRS}
 )
 
 # 1. 多尺寸 ArUco 检测器
@@ -130,6 +132,7 @@ target_link_libraries(world_robot_calibration_node
   ${catkin_LIBRARIES}
   ${YAML_CPP_LIBRARIES}
   ${EIGEN3_LIBRARIES}
+  ${CERES_LIBRARIES}
 )
 add_dependencies(world_robot_calibration_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
