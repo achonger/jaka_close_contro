@@ -17,7 +17,6 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <Eigen/Dense>
-#include <Eigen/Eigenvalues>
 
 #include <algorithm>
 #include <cmath>
@@ -32,7 +31,7 @@ struct Observation
 {
   int face_id;
   Eigen::Vector3d t;
-  Eigen::Quaterniond q;  // w, x, y, z
+  Eigen::Matrix3d R;
   double base_weight;
 };
 
@@ -45,7 +44,6 @@ public:
         cube_frame_("cube_center"),
         tool_frame_("Link_6"),
         has_prev_(false),
-        has_prev_q_(false),
         has_tool_offset_(false),
         publish_tool_tf_(false),
         tf_buffer_(),
@@ -152,32 +150,90 @@ private:
     return 1.0 / ar;
   }
 
-  Eigen::Quaterniond weightedAverageQuaternion(const std::vector<Observation> &obs,
-                                               const std::vector<double> &weights) const
+  static Eigen::Matrix3d skew(const Eigen::Vector3d &w)
   {
-    Eigen::Matrix4d M = Eigen::Matrix4d::Zero();
-    for (size_t i = 0; i < obs.size(); ++i)
-    {
-      if (weights[i] <= 0.0)
-        continue;
-      Eigen::Vector4d qv;
-      qv << obs[i].q.w(), obs[i].q.x(), obs[i].q.y(), obs[i].q.z();
-      M += weights[i] * (qv * qv.transpose());
-    }
-
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> es(M);
-    Eigen::Vector4d ev = es.eigenvectors().col(3);
-    Eigen::Quaterniond q_mean(ev(0), ev(1), ev(2), ev(3));
-    q_mean.normalize();
-    return q_mean;
+    Eigen::Matrix3d W;
+    W << 0, -w.z(), w.y(),
+        w.z(), 0, -w.x(),
+        -w.y(), w.x(), 0;
+    return W;
   }
 
-  double quaternionAngularDistanceRad(const Eigen::Quaterniond &qa, const Eigen::Quaterniond &qb) const
+  static Eigen::Matrix3d expSO3(const Eigen::Vector3d &phi)
   {
-    double dot = qa.dot(qb);
-    dot = clamp(dot, -1.0, 1.0);
-    double angle = 2.0 * std::acos(std::abs(dot));
-    return angle;
+    double theta = phi.norm();
+    if (theta < 1e-8)
+    {
+      return Eigen::Matrix3d::Identity() + skew(phi);
+    }
+    Eigen::Vector3d a = phi / theta;
+    Eigen::Matrix3d A = skew(a);
+    return Eigen::Matrix3d::Identity() + std::sin(theta) * A + (1.0 - std::cos(theta)) * (A * A);
+  }
+
+  static Eigen::Vector3d logSO3(const Eigen::Matrix3d &R)
+  {
+    double cos_theta = (R.trace() - 1.0) * 0.5;
+    cos_theta = clamp(cos_theta, -1.0, 1.0);
+    double theta = std::acos(cos_theta);
+    if (theta < 1e-8)
+    {
+      Eigen::Vector3d v;
+      v << R(2, 1) - R(1, 2), R(0, 2) - R(2, 0), R(1, 0) - R(0, 1);
+      return 0.5 * v;
+    }
+    double sin_theta = std::sin(theta);
+    Eigen::Vector3d v;
+    v << R(2, 1) - R(1, 2), R(0, 2) - R(2, 0), R(1, 0) - R(0, 1);
+    return (theta / (2.0 * sin_theta)) * v;
+  }
+
+  double rotationAngularDistanceRad(const Eigen::Matrix3d &Ra, const Eigen::Matrix3d &Rb) const
+  {
+    Eigen::Matrix3d R_err = Ra.transpose() * Rb;
+    Eigen::Vector3d phi = logSO3(R_err);
+    return phi.norm();
+  }
+
+  Eigen::Matrix3d weightedAverageSO3(const std::vector<Observation> &obs, const std::vector<double> &weights) const
+  {
+    Eigen::Matrix3d R_mean = Eigen::Matrix3d::Identity();
+    bool initialized = false;
+    for (size_t i = 0; i < obs.size(); ++i)
+    {
+      if (weights[i] > 0.0)
+      {
+        R_mean = obs[i].R;
+        initialized = true;
+        break;
+      }
+    }
+    if (!initialized)
+    {
+      return R_mean;
+    }
+
+    for (int iter = 0; iter < 5; ++iter)
+    {
+      Eigen::Vector3d delta = Eigen::Vector3d::Zero();
+      double sum_w = 0.0;
+      for (size_t i = 0; i < obs.size(); ++i)
+      {
+        if (weights[i] <= 0.0)
+          continue;
+        Eigen::Matrix3d R_err = R_mean.transpose() * obs[i].R;
+        Eigen::Vector3d phi = logSO3(R_err);
+        delta += weights[i] * phi;
+        sum_w += weights[i];
+      }
+      if (sum_w <= 1e-9)
+        break;
+      delta /= sum_w;
+      R_mean = R_mean * expSO3(delta);
+      if (delta.norm() < 1e-6)
+        break;
+    }
+    return R_mean;
   }
 
   double computeWeight(const fiducial_msgs::FiducialTransform &tfm) const
@@ -188,10 +244,12 @@ private:
     return 1.0 / err;
   }
 
-  tf2::Transform toTf2(const Eigen::Vector3d &t, const Eigen::Quaterniond &q) const
+  tf2::Transform toTf2(const Eigen::Vector3d &t, const Eigen::Matrix3d &R) const
   {
     tf2::Transform T;
     T.setOrigin(tf2::Vector3(t.x(), t.y(), t.z()));
+    Eigen::Quaterniond q(R);
+    q.normalize();
     tf2::Quaternion tfq(q.x(), q.y(), q.z(), q.w());
     tfq.normalize();
     T.setRotation(tfq);
@@ -214,12 +272,12 @@ private:
     if (obs.empty())
       return result;
 
-    auto selectBestObs = [&](const Eigen::Quaterniond &q_ref) -> size_t {
+    auto selectBestObs = [&](const Eigen::Matrix3d &R_ref) -> size_t {
       size_t best = 0;
       double best_ang = std::numeric_limits<double>::infinity();
       for (size_t i = 0; i < obs.size(); ++i)
       {
-        double ang = quaternionAngularDistanceRad(q_ref, obs[i].q);
+        double ang = rotationAngularDistanceRad(R_ref, obs[i].R);
         if (ang < best_ang)
         {
           best_ang = ang;
@@ -229,25 +287,17 @@ private:
       return best;
     };
 
-    // 四元数同半球：参考上一帧或第一个观测
-    Eigen::Quaterniond q_ref;
+    Eigen::Matrix3d R_ref;
     if (has_prev_)
     {
       tf2::Quaternion q = prev_.getRotation();
       q.normalize();
-      q_ref = Eigen::Quaterniond(q.w(), q.x(), q.y(), q.z());
+      Eigen::Quaterniond q_ref(q.w(), q.x(), q.y(), q.z());
+      R_ref = q_ref.toRotationMatrix();
     }
     else
     {
-      q_ref = obs.front().q;
-    }
-
-    for (auto &o : obs)
-    {
-      if (q_ref.dot(o.q) < 0.0)
-      {
-        o.q.coeffs() *= -1.0;
-      }
+      R_ref = obs.front().R;
     }
 
     std::vector<double> weights(obs.size(), 1.0);
@@ -266,9 +316,10 @@ private:
       tf2::Quaternion prev_q_tf = prev_.getRotation();
       prev_q_tf.normalize();
       Eigen::Quaterniond q_prev(prev_q_tf.w(), prev_q_tf.x(), prev_q_tf.y(), prev_q_tf.z());
+      Eigen::Matrix3d R_prev = q_prev.toRotationMatrix();
       for (size_t i = 0; i < obs.size(); ++i)
       {
-        double ang_prev = quaternionAngularDistanceRad(q_prev, obs[i].q);
+        double ang_prev = rotationAngularDistanceRad(R_prev, obs[i].R);
         if (ang_prev > gate_ang_single)
         {
           weights[i] = 0.0;
@@ -296,8 +347,8 @@ private:
       if (sum_w <= 1e-9)
       {
         // 退化：全部被 gate，选择与参考最接近的单面作为结果
-        size_t best = selectBestObs(q_ref);
-        result.T = toTf2(obs[best].t, obs[best].q);
+        size_t best = selectBestObs(R_ref);
+        result.T = toTf2(obs[best].t, obs[best].R);
         result.inliers = 1;
         result.valid = (result.inliers >= static_cast<size_t>(min_inliers_));
         result.drop_logs.push_back("All obs gated, fallback to best single");
@@ -305,7 +356,7 @@ private:
       }
 
       t_mean /= sum_w;
-      Eigen::Quaterniond q_mean = weightedAverageQuaternion(obs, weights);
+      Eigen::Matrix3d R_mean = weightedAverageSO3(obs, weights);
 
       std::vector<double> new_w(obs.size(), 0.0);
       result.dropped_faces.clear();
@@ -313,7 +364,7 @@ private:
 
       for (size_t i = 0; i < obs.size(); ++i)
       {
-        double ang_rad = quaternionAngularDistanceRad(q_mean, obs[i].q);
+        double ang_rad = rotationAngularDistanceRad(R_mean, obs[i].R);
         double pos_err = (obs[i].t - t_mean).norm();
 
         bool is_multi = obs.size() >= 2;
@@ -350,8 +401,8 @@ private:
 
     if (sum_w <= 1e-9)
     {
-      size_t best = selectBestObs(q_ref);
-      result.T = toTf2(obs[best].t, obs[best].q);
+      size_t best = selectBestObs(R_ref);
+      result.T = toTf2(obs[best].t, obs[best].R);
       result.inliers = 1;
       result.valid = (result.inliers >= static_cast<size_t>(min_inliers_));
       result.drop_logs.push_back("All obs rejected after weighting, fallback to best single");
@@ -359,7 +410,7 @@ private:
     }
 
     t_mean /= sum_w;
-    Eigen::Quaterniond q_mean = weightedAverageQuaternion(obs, weights);
+    Eigen::Matrix3d R_mean = weightedAverageSO3(obs, weights);
 
     // 统计有效观测
     size_t inliers = 0;
@@ -369,7 +420,7 @@ private:
         ++inliers;
     }
 
-    result.T = toTf2(t_mean, q_mean);
+    result.T = toTf2(t_mean, R_mean);
     result.inliers = inliers;
     result.valid = (inliers >= static_cast<size_t>(min_inliers_));
     return result;
@@ -378,6 +429,22 @@ private:
   // --------------- 时间滤波 ---------------
   tf2::Transform temporalFilter(const tf2::Transform &T_new, const ros::Time &stamp)
   {
+    tf2::Transform T_prev_tf = has_prev_ ? prev_ : T_new;
+    tf2::Vector3 p_prev_tf = T_prev_tf.getOrigin();
+    tf2::Quaternion q_prev_tf = T_prev_tf.getRotation();
+    q_prev_tf.normalize();
+
+    Eigen::Vector3d p_prev(p_prev_tf.x(), p_prev_tf.y(), p_prev_tf.z());
+    Eigen::Quaterniond q_prev_eig(q_prev_tf.w(), q_prev_tf.x(), q_prev_tf.y(), q_prev_tf.z());
+    Eigen::Matrix3d R_prev = q_prev_eig.toRotationMatrix();
+
+    tf2::Vector3 p_new_tf = T_new.getOrigin();
+    tf2::Quaternion q_new_tf = T_new.getRotation();
+    q_new_tf.normalize();
+    Eigen::Vector3d p_new(p_new_tf.x(), p_new_tf.y(), p_new_tf.z());
+    Eigen::Quaterniond q_new_eig(q_new_tf.w(), q_new_tf.x(), q_new_tf.y(), q_new_tf.z());
+    Eigen::Matrix3d R_new = q_new_eig.toRotationMatrix();
+
     if (!has_prev_)
     {
       prev_ = T_new;
@@ -397,40 +464,27 @@ private:
     double max_step_pos = max_lin_speed_mps_ * dt;
     double max_step_ang = (max_ang_speed_dps_ * M_PI / 180.0) * dt;
 
-    tf2::Vector3 p_prev = prev_.getOrigin();
-    tf2::Vector3 p_new = T_new.getOrigin();
-    tf2::Vector3 dp = p_new - p_prev;
-    double dist = dp.length();
+    Eigen::Vector3d dp = p_new - p_prev;
+    double dist = dp.norm();
     if (dist > max_step_pos && dist > 1e-6)
     {
       dp *= (max_step_pos / dist);
       p_new = p_prev + dp;
     }
 
-    tf2::Quaternion q_prev = prev_.getRotation();
-    q_prev.normalize();
-    tf2::Quaternion q_new = T_new.getRotation();
-    q_new.normalize();
-    if (q_prev.x() * q_new.x() + q_prev.y() * q_new.y() + q_prev.z() * q_new.z() + q_prev.w() * q_new.w() < 0.0)
-    {
-      q_new = tf2::Quaternion(-q_new.x(), -q_new.y(), -q_new.z(), -q_new.w());
-    }
-
-    tf2::Quaternion dq = q_prev.inverse() * q_new;
-    dq.normalize();
-    double ang = dq.getAngle();
+    Eigen::Matrix3d R_err = R_prev.transpose() * R_new;
+    Eigen::Vector3d phi = logSO3(R_err);
+    double ang = phi.norm();
     double alpha = 1.0;
     if (ang > max_step_ang && ang > 1e-6)
     {
       alpha = max_step_ang / ang;
     }
-    tf2::Quaternion q_f = q_prev.slerp(q_new, alpha);
-    q_f.normalize();
+    Eigen::Vector3d phi_step = alpha * phi;
+    Eigen::Matrix3d R_f = R_prev * expSO3(phi_step);
+    Eigen::Vector3d p_f = (1.0 - alpha) * p_prev + alpha * p_new;
 
-    tf2::Transform T_f;
-    T_f.setOrigin(p_prev * (1.0 - alpha) + p_new * alpha);
-    T_f.setRotation(q_f);
-
+    tf2::Transform T_f = toTf2(p_f, R_f);
     prev_ = T_f;
     last_stamp_ = stamp;
     return T_f;
@@ -452,12 +506,15 @@ private:
       tf2::fromMsg(tfm.transform, T_cf);
       tf2::Transform T_cc = T_cf * it->second;
 
-      tf2::Quaternion q2 = T_cc.getRotation();
-      q2.normalize();
+      tf2::Vector3 p_cc = T_cc.getOrigin();
+      tf2::Quaternion q_cc = T_cc.getRotation();
+      q_cc.normalize();
+      Eigen::Quaterniond q_cc_eig(q_cc.w(), q_cc.x(), q_cc.y(), q_cc.z());
+
       Observation o;
       o.face_id = tfm.fiducial_id;
-      o.t = Eigen::Vector3d(T_cc.getOrigin().x(), T_cc.getOrigin().y(), T_cc.getOrigin().z());
-      o.q = Eigen::Quaterniond(q2.w(), q2.x(), q2.y(), q2.z());
+      o.t = Eigen::Vector3d(p_cc.x(), p_cc.y(), p_cc.z());
+      o.R = q_cc_eig.toRotationMatrix();
       o.base_weight = computeWeight(tfm);
       obs.push_back(o);
     }
@@ -491,12 +548,13 @@ private:
       tf2::Quaternion q_f = T_use.getRotation();
       q_f.normalize();
       Eigen::Quaterniond qf(q_f.w(), q_f.x(), q_f.y(), q_f.z());
+      Eigen::Matrix3d R_f = qf.toRotationMatrix();
       Eigen::Vector3d tf_v(t_f.x(), t_f.y(), t_f.z());
 
       for (const auto &o : obs)
       {
         stats_msg.pos_err_m.push_back(static_cast<float>((o.t - tf_v).norm()));
-        double ang = quaternionAngularDistanceRad(qf, o.q) * 180.0 / M_PI;
+        double ang = rotationAngularDistanceRad(R_f, o.R) * 180.0 / M_PI;
         stats_msg.ang_err_deg.push_back(static_cast<float>(ang));
       }
 
@@ -520,21 +578,6 @@ private:
     ros::Time stamp = msg->header.stamp;
 
     tf2::Transform T_out = temporalFilter(fused.T, stamp);
-
-    tf2::Quaternion q_curr = T_out.getRotation();
-    q_curr.normalize();
-    if (has_prev_q_)
-    {
-      double dot = prev_cube_q_.x() * q_curr.x() + prev_cube_q_.y() * q_curr.y() +
-                   prev_cube_q_.z() * q_curr.z() + prev_cube_q_.w() * q_curr.w();
-      if (dot < 0.0)
-      {
-        q_curr = tf2::Quaternion(-q_curr.x(), -q_curr.y(), -q_curr.z(), -q_curr.w());
-      }
-    }
-    T_out.setRotation(q_curr);
-    prev_cube_q_ = q_curr;
-    has_prev_q_ = true;
 
     publishStats(T_out);
 
@@ -619,9 +662,6 @@ private:
   bool has_prev_;
   tf2::Transform prev_;
   ros::Time last_stamp_;
-
-  tf2::Quaternion prev_cube_q_;
-  bool has_prev_q_;
 };
 
 int main(int argc, char **argv)
