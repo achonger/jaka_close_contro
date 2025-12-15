@@ -43,7 +43,7 @@ public:
         camera_frame_default_("zed2i_left_camera_optical_frame"),
         cube_frame_("cube_center"),
         tool_frame_("Link_6"),
-        has_prev_(false),
+        has_iekf_state_(false),
         has_tool_offset_(false),
         publish_tool_tf_(false),
         tf_buffer_(),
@@ -68,9 +68,11 @@ public:
     pnh_.param("gate_pos_multi_m", gate_pos_multi_m_, 0.08);
     pnh_.param("min_inliers", min_inliers_, 1);
 
-    // 时间一致性（速度上限）
-    pnh_.param("max_lin_speed_mps", max_lin_speed_mps_, 0.8);
-    pnh_.param("max_ang_speed_dps", max_ang_speed_dps_, 360.0);
+    // IEKF 噪声参数
+    pnh_.param("proc_noise_pos_m", proc_noise_pos_m_, 0.02);
+    pnh_.param("proc_noise_ang_deg", proc_noise_ang_deg_, 5.0);
+    pnh_.param("meas_noise_pos_m", meas_noise_pos_m_, 0.005);
+    pnh_.param("meas_noise_ang_deg", meas_noise_ang_deg_, 1.5);
     pnh_.param("timeout_sec", timeout_sec_, 0.5);
 
     ROS_INFO_STREAM("[Fusion] faces_yaml: " << faces_yaml_path_);
@@ -188,6 +190,33 @@ private:
     return (theta / (2.0 * sin_theta)) * v;
   }
 
+  static Eigen::Matrix<double, 6, 1> se3LogError(
+      const Eigen::Vector3d &t_pred, const Eigen::Matrix3d &R_pred,
+      const Eigen::Vector3d &t_meas, const Eigen::Matrix3d &R_meas)
+  {
+    Eigen::Matrix3d R_rel = R_pred.transpose() * R_meas;
+    Eigen::Vector3d phi = logSO3(R_rel);
+
+    Eigen::Vector3d t_rel = R_pred.transpose() * (t_meas - t_pred);
+
+    Eigen::Matrix<double, 6, 1> xi;
+    xi.head<3>() = t_rel;
+    xi.tail<3>() = phi;
+    return xi;
+  }
+
+  static void se3ApplyError(
+      const Eigen::Vector3d &t_pred, const Eigen::Matrix3d &R_pred,
+      const Eigen::Matrix<double, 6, 1> &delta,
+      Eigen::Vector3d &t_new, Eigen::Matrix3d &R_new)
+  {
+    Eigen::Vector3d rho = delta.head<3>();
+    Eigen::Vector3d phi = delta.tail<3>();
+
+    R_new = R_pred * expSO3(phi);
+    t_new = t_pred + R_pred * rho;
+  }
+
   double rotationAngularDistanceRad(const Eigen::Matrix3d &Ra, const Eigen::Matrix3d &Rb) const
   {
     Eigen::Matrix3d R_err = Ra.transpose() * Rb;
@@ -288,9 +317,9 @@ private:
     };
 
     Eigen::Matrix3d R_ref;
-    if (has_prev_)
+    if (has_iekf_state_)
     {
-      tf2::Quaternion q = prev_.getRotation();
+      tf2::Quaternion q = iekf_X_.getRotation();
       q.normalize();
       Eigen::Quaterniond q_ref(q.w(), q.x(), q.y(), q.z());
       R_ref = q_ref.toRotationMatrix();
@@ -404,68 +433,95 @@ private:
     return result;
   }
 
-  // --------------- 时间滤波 ---------------
-  tf2::Transform temporalFilter(const tf2::Transform &T_new, const ros::Time &stamp)
+  // --------------- IEKF ---------------
+  tf2::Transform iekfUpdate(const tf2::Transform &Z_tf, const ros::Time &stamp, bool has_measurement)
   {
-    tf2::Transform T_prev_tf = has_prev_ ? prev_ : T_new;
-    tf2::Vector3 p_prev_tf = T_prev_tf.getOrigin();
-    tf2::Quaternion q_prev_tf = T_prev_tf.getRotation();
-    q_prev_tf.normalize();
-
-    Eigen::Vector3d p_prev(p_prev_tf.x(), p_prev_tf.y(), p_prev_tf.z());
-    Eigen::Quaterniond q_prev_eig(q_prev_tf.w(), q_prev_tf.x(), q_prev_tf.y(), q_prev_tf.z());
-    Eigen::Matrix3d R_prev = q_prev_eig.toRotationMatrix();
-
-    tf2::Vector3 p_new_tf = T_new.getOrigin();
-    tf2::Quaternion q_new_tf = T_new.getRotation();
-    q_new_tf.normalize();
-    Eigen::Vector3d p_new(p_new_tf.x(), p_new_tf.y(), p_new_tf.z());
-    Eigen::Quaterniond q_new_eig(q_new_tf.w(), q_new_tf.x(), q_new_tf.y(), q_new_tf.z());
-    Eigen::Matrix3d R_new = q_new_eig.toRotationMatrix();
-
-    if (!has_prev_)
+    if (!has_iekf_state_)
     {
-      prev_ = T_new;
-      last_stamp_ = stamp;
-      has_prev_ = true;
-      return T_new;
+      if (has_measurement)
+      {
+        iekf_X_ = Z_tf;
+      }
+      else
+      {
+        iekf_X_.setIdentity();
+      }
+      iekf_P_.setIdentity();
+      iekf_P_ *= 1e-4;
+      iekf_last_stamp_ = stamp;
+      has_iekf_state_ = true;
+      return iekf_X_;
     }
 
-    double dt = (stamp - last_stamp_).toSec();
+    double dt = (stamp - iekf_last_stamp_).toSec();
     if (dt <= 0.0 || dt > timeout_sec_)
     {
-      prev_ = T_new;
-      last_stamp_ = stamp;
-      return T_new;
+      if (has_measurement)
+      {
+        iekf_X_ = Z_tf;
+      }
+      iekf_P_.setIdentity();
+      iekf_P_ *= 1e-4;
+      iekf_last_stamp_ = stamp;
+      return iekf_X_;
     }
 
-    double max_step_pos = max_lin_speed_mps_ * dt;
-    double max_step_ang = (max_ang_speed_dps_ * M_PI / 180.0) * dt;
+    double dt_clamped = std::max(dt, 1e-3);
+    Eigen::Matrix<double, 6, 6> Q = Eigen::Matrix<double, 6, 6>::Zero();
+    double q_pos = proc_noise_pos_m_;
+    double q_ang = proc_noise_ang_deg_ * M_PI / 180.0;
+    for (int i = 0; i < 3; ++i)
+      Q(i, i) = q_pos * q_pos * dt_clamped;
+    for (int i = 3; i < 6; ++i)
+      Q(i, i) = q_ang * q_ang * dt_clamped;
+    Eigen::Matrix<double, 6, 6> P_pred = iekf_P_ + Q;
 
-    Eigen::Vector3d dp = p_new - p_prev;
-    double dist = dp.norm();
-    if (dist > max_step_pos && dist > 1e-6)
+    tf2::Vector3 p_pred_tf = iekf_X_.getOrigin();
+    tf2::Quaternion q_pred_tf = iekf_X_.getRotation();
+    q_pred_tf.normalize();
+    Eigen::Vector3d t_pred(p_pred_tf.x(), p_pred_tf.y(), p_pred_tf.z());
+    Eigen::Quaterniond q_pred_eig(q_pred_tf.w(), q_pred_tf.x(), q_pred_tf.y(), q_pred_tf.z());
+    Eigen::Matrix3d R_pred = q_pred_eig.toRotationMatrix();
+
+    if (!has_measurement)
     {
-      dp *= (max_step_pos / dist);
-      p_new = p_prev + dp;
+      iekf_P_ = P_pred;
+      iekf_last_stamp_ = stamp;
+      return iekf_X_;
     }
 
-    Eigen::Matrix3d R_err = R_prev.transpose() * R_new;
-    Eigen::Vector3d phi = logSO3(R_err);
-    double ang = phi.norm();
-    double alpha = 1.0;
-    if (ang > max_step_ang && ang > 1e-6)
-    {
-      alpha = max_step_ang / ang;
-    }
-    Eigen::Vector3d phi_step = alpha * phi;
-    Eigen::Matrix3d R_f = R_prev * expSO3(phi_step);
-    Eigen::Vector3d p_f = (1.0 - alpha) * p_prev + alpha * p_new;
+    tf2::Vector3 p_meas_tf = Z_tf.getOrigin();
+    tf2::Quaternion q_meas_tf = Z_tf.getRotation();
+    q_meas_tf.normalize();
+    Eigen::Vector3d t_meas(p_meas_tf.x(), p_meas_tf.y(), p_meas_tf.z());
+    Eigen::Quaterniond q_meas_eig(q_meas_tf.w(), q_meas_tf.x(), q_meas_tf.y(), q_meas_tf.z());
+    Eigen::Matrix3d R_meas = q_meas_eig.toRotationMatrix();
 
-    tf2::Transform T_f = toTf2(p_f, R_f);
-    prev_ = T_f;
-    last_stamp_ = stamp;
-    return T_f;
+    Eigen::Matrix<double, 6, 1> y = se3LogError(t_pred, R_pred, t_meas, R_meas);
+
+    Eigen::Matrix<double, 6, 6> R_cov = Eigen::Matrix<double, 6, 6>::Zero();
+    double r_pos = meas_noise_pos_m_;
+    double r_ang = meas_noise_ang_deg_ * M_PI / 180.0;
+    for (int i = 0; i < 3; ++i)
+      R_cov(i, i) = r_pos * r_pos;
+    for (int i = 3; i < 6; ++i)
+      R_cov(i, i) = r_ang * r_ang;
+
+    Eigen::Matrix<double, 6, 6> S = P_pred + R_cov;
+    Eigen::Matrix<double, 6, 6> K = P_pred * S.inverse();
+
+    Eigen::Matrix<double, 6, 1> delta = K * y;
+
+    Eigen::Vector3d t_new;
+    Eigen::Matrix3d R_new;
+    se3ApplyError(t_pred, R_pred, delta, t_new, R_new);
+
+    Eigen::Matrix<double, 6, 6> I6 = Eigen::Matrix<double, 6, 6>::Identity();
+    iekf_P_ = (I6 - K) * P_pred * (I6 - K).transpose() + K * R_cov * K.transpose();
+
+    iekf_X_ = toTf2(t_new, R_new);
+    iekf_last_stamp_ = stamp;
+    return iekf_X_;
   }
 
   // --------------- 主回调 ---------------
@@ -539,23 +595,39 @@ private:
       stats_pub_.publish(stats_msg);
     };
 
+    std::string cam_frame = msg->header.frame_id.empty() ? camera_frame_default_ : msg->header.frame_id;
+    ros::Time stamp = msg->header.stamp;
+
     if (!fused.valid)
     {
       ROS_WARN("[Fusion] HOLD_LAST_GOOD: no valid inliers (n_obs=%zu, dropped=%zu)",
                obs.size(), fused.dropped_faces.size());
-      tf2::Transform use_tf = has_prev_ ? prev_ : fused.T;
-      publishStats(use_tf);
-      if (has_prev_)
+
+      tf2::Transform use_tf;
+      if (has_iekf_state_)
       {
-        publish(prev_, msg->header.stamp, msg->header.frame_id.empty() ? camera_frame_default_ : msg->header.frame_id);
+        use_tf = iekfUpdate(iekf_X_, stamp, false);
+      }
+      else
+      {
+        use_tf = fused.T;
+        iekf_X_ = fused.T;
+        iekf_P_.setIdentity();
+        iekf_P_ *= 1e-4;
+        iekf_last_stamp_ = stamp;
+        has_iekf_state_ = true;
+      }
+
+      publishStats(use_tf);
+
+      if (has_iekf_state_)
+      {
+        publish(use_tf, msg->header.stamp, cam_frame);
       }
       return;
     }
 
-    std::string cam_frame = msg->header.frame_id.empty() ? camera_frame_default_ : msg->header.frame_id;
-    ros::Time stamp = msg->header.stamp;
-
-    tf2::Transform T_out = temporalFilter(fused.T, stamp);
+    tf2::Transform T_out = iekfUpdate(fused.T, stamp, true);
 
     publishStats(T_out);
 
@@ -633,13 +705,16 @@ private:
   double gate_pos_multi_m_;
   int min_inliers_;
 
-  double max_lin_speed_mps_;
-  double max_ang_speed_dps_;
+  double proc_noise_pos_m_;
+  double proc_noise_ang_deg_;
+  double meas_noise_pos_m_;
+  double meas_noise_ang_deg_;
   double timeout_sec_;
 
-  bool has_prev_;
-  tf2::Transform prev_;
-  ros::Time last_stamp_;
+  bool has_iekf_state_;
+  tf2::Transform iekf_X_;
+  ros::Time iekf_last_stamp_;
+  Eigen::Matrix<double, 6, 6> iekf_P_;
 };
 
 int main(int argc, char **argv)
