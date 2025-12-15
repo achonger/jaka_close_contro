@@ -34,9 +34,17 @@
 
 ## 快速上手：自动轨迹 + 自动采样标定
 
-无需手动移动机械臂，直接运行预定义标定位姿（TCP 笛卡尔位姿）并自动采样/求解：
+无需手动移动机械臂，直接运行预定义标定位姿（TCP 笛卡尔位姿）并自动采样。默认推荐“录制模式”：只收集数据，不在线求解。
 
-1. 启动全自动标定管线：
+1. 启动录制管线（只采样、不解算）：
+   ```bash
+   roslaunch jaka_close_contro world_robot_calib_record.launch
+   ```
+   - 输出数据集：`config/world_robot_calib_dataset_<time>.csv`（可用 `~output_dataset_csv` 覆盖）。
+   - 节点会依次运动到标定位姿，在稳定窗口内对 `/cube_center_fused` 和 `base->tool` TF 做李群均值，写入 CSV 供离线求解。
+   - 如需同时调用旧的 `/collect_world_robot_sample` 在线求解，可将 `online_solve:=true` 打开。
+
+2. 旧版“一站式采集+在线求解”依然可用：
    ```bash
    roslaunch jaka_close_contro world_robot_autocalib_motion.launch
    ```
@@ -44,7 +52,13 @@
    - 轨迹文件使用 `config/jaka1_world_robot_calibration_pose.csv`，字段为 `name,x_mm,y_mm,z_mm,rx_deg,ry_deg,rz_deg`，单位分别为 mm / deg（基座坐标系下的 TCP 位姿）。
    - `world_robot_calib_motion_node` 通过 `/jaka_driver/linear_move` 调用官方驱动的笛卡尔直线运动接口，默认速度倍率 15%，线速度 80 mm/s、线加速度 200 mm/s²。到达每个姿态后自动**等待 5 s（采样前）+ 触发采样 + 再等待 2 s**，确保视觉稳定再切换下一个点。
 2. 节点会按 CSV 顺序依次发送目标 TCP 位姿，运动过程中自动判断位姿变化并调用 `/collect_world_robot_sample`（或由自动管理节点触发）。
-3. 样本数量达到 `min_samples`（默认 16）后，管理节点自动调用 `/solve_world_robot_calibration`，在终端打印残差统计并写入 `config/world_robot_extrinsic.yaml`。
+3. 离线求解入口：`scripts/world_robot_calib_offline.py`（模板脚本，待填入手眼/世界-机器人求解算法）。
+   ```bash
+   rosrun jaka_close_contro world_robot_calib_offline.py \
+       --input config/world_robot_calib_dataset_xxx.csv \
+       --output-world-robot config/world_robot_extrinsic.yaml \
+       --output-tool-offset config/tool_offset_current.yaml
+   ```
 4. 标定完成后即可直接切换到闭环观察/控制（`world_robot_closedloop.launch`），无需再次求解外参。
 
 ## 快速上手：一键闭环观察/控制

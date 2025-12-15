@@ -151,6 +151,12 @@ target_link_libraries(world_robot_calib_motion_node
 )
 add_dependencies(world_robot_calib_motion_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
+add_executable(world_robot_calib_recorder_node src/world_robot_calib_recorder_node.cpp)
+target_link_libraries(world_robot_calib_recorder_node
+  ${catkin_LIBRARIES}
+)
+add_dependencies(world_robot_calib_recorder_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
 # 9. 关节状态适配（jaka_driver -> /joint_states）
 add_executable(jaka_state_adapter_node src/jaka_state_adapter_node.cpp)
 target_link_libraries(jaka_state_adapter_node
