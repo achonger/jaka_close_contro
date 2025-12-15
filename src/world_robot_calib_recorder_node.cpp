@@ -10,6 +10,7 @@
 
 #include <Eigen/Dense>
 
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -463,7 +464,7 @@ private:
     return false;
   }
 
-  bool triggerSample() const
+  bool triggerSample()
   {
     if (!online_solve_)
     {
@@ -514,8 +515,29 @@ private:
 
     sample.n_obs = has_stats_ ? latest_stats_.n_obs : 0;
     sample.inliers = has_stats_ ? latest_stats_.inliers : 0;
-    sample.pos_err_rms = has_stats_ ? latest_stats_.pos_err_rms : 0.0f;
-    sample.ang_err_rms_deg = has_stats_ ? latest_stats_.ang_err_rms_deg : 0.0f;
+    if (has_stats_)
+    {
+      auto rms_vec = [](const std::vector<float> &vals) -> float {
+        if (vals.empty())
+        {
+          return 0.0f;
+        }
+        double accum = 0.0;
+        for (const auto v : vals)
+        {
+          accum += static_cast<double>(v) * static_cast<double>(v);
+        }
+        return static_cast<float>(std::sqrt(accum / static_cast<double>(vals.size())));
+      };
+
+      sample.pos_err_rms = rms_vec(latest_stats_.pos_err_m);
+      sample.ang_err_rms_deg = rms_vec(latest_stats_.ang_err_deg);
+    }
+    else
+    {
+      sample.pos_err_rms = 0.0f;
+      sample.ang_err_rms_deg = 0.0f;
+    }
 
     return true;
   }
