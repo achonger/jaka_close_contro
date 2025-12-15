@@ -69,8 +69,8 @@ public:
     pnh_.param("min_inliers", min_inliers_, 1);
 
     // 时间一致性（速度上限）
-    pnh_.param("max_lin_speed_mps", max_lin_speed_mps_, 0.3);
-    pnh_.param("max_ang_speed_dps", max_ang_speed_dps_, 120.0);
+    pnh_.param("max_lin_speed_mps", max_lin_speed_mps_, 0.8);
+    pnh_.param("max_ang_speed_dps", max_ang_speed_dps_, 360.0);
     pnh_.param("timeout_sec", timeout_sec_, 0.5);
 
     ROS_INFO_STREAM("[Fusion] faces_yaml: " << faces_yaml_path_);
@@ -309,28 +309,6 @@ private:
     const double sigma_ang_rad = sigma_ang_deg_ * M_PI / 180.0;
     const double gate_ang_single = gate_ang_single_deg_ * M_PI / 180.0;
     const double gate_ang_multi = gate_ang_multi_deg_ * M_PI / 180.0;
-
-    // 先依据上一帧姿态做一致性筛选（抑制翻转）
-    if (has_prev_)
-    {
-      tf2::Quaternion prev_q_tf = prev_.getRotation();
-      prev_q_tf.normalize();
-      Eigen::Quaterniond q_prev(prev_q_tf.w(), prev_q_tf.x(), prev_q_tf.y(), prev_q_tf.z());
-      Eigen::Matrix3d R_prev = q_prev.toRotationMatrix();
-      for (size_t i = 0; i < obs.size(); ++i)
-      {
-        double ang_prev = rotationAngularDistanceRad(R_prev, obs[i].R);
-        if (ang_prev > gate_ang_single)
-        {
-          weights[i] = 0.0;
-          result.dropped_faces.push_back(obs[i].face_id);
-          std::ostringstream oss;
-          oss << "face=" << obs[i].face_id << ", ang_prev=" << (ang_prev * 180.0 / M_PI)
-              << " deg (prev gate)";
-          result.drop_logs.push_back(oss.str());
-        }
-      }
-    }
 
     for (int iter = 0; iter < 2; ++iter)
     {
