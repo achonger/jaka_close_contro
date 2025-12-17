@@ -593,7 +593,14 @@ private:
     geometry_msgs::PoseStamped pmsg;
     pmsg.header.stamp = stamp;
     pmsg.header.frame_id = cam_frame;
-    pmsg.pose = tf2::toMsg(Tn);
+    tf2::Vector3 t = Tn.getOrigin();
+    tf2::Quaternion q_msg = Tn.getRotation();
+    geometry_msgs::Pose pose_msg;
+    pose_msg.position.x = t.x();
+    pose_msg.position.y = t.y();
+    pose_msg.position.z = t.z();
+    pose_msg.orientation = tf2::toMsg(q_msg);
+    pmsg.pose = pose_msg;
     pub_.publish(pmsg);
   }
 
