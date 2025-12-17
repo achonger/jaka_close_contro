@@ -6,7 +6,6 @@
 #include <tf2_ros/transform_listener.h>
 #include <jaka_msgs/Move.h>
 #include <jaka_close_contro/CubeFusionStats.h>
-#include <jaka_close_contro/WorldRobotCollectSample.h>
 
 #include <Eigen/Dense>
 
@@ -154,8 +153,7 @@ public:
     pnh_.param<std::string>("cube_frame", cube_frame_, std::string("cube_center"));
     pnh_.param<std::string>("base_frame", base_frame_, std::string("Link_0"));
     pnh_.param<std::string>("tool_frame", tool_frame_, std::string("Link_6"));
-    pnh_.param<bool>("online_solve", online_solve_, false);
-    pnh_.param<std::string>("collect_sample_service", collect_sample_service_, std::string("/collect_world_robot_sample"));
+    pnh_.param<double>("tf_lookup_timeout_sec", tf_lookup_timeout_sec_, 0.1);
 
     pnh_.param<std::string>("output_dataset_csv", output_dataset_csv_, std::string(""));
     if (output_dataset_csv_.empty())
@@ -166,7 +164,6 @@ public:
     }
 
     linear_move_client_ = nh_.serviceClient<jaka_msgs::Move>(linear_move_service_);
-    collect_sample_client_ = nh_.serviceClient<jaka_close_contro::WorldRobotCollectSample>(collect_sample_service_);
     joint_state_sub_ = nh_.subscribe(joint_state_topic_, 50, &WorldRobotCalibRecorderNode::jointStateCallback, this);
     fused_sub_ = nh_.subscribe(fused_topic_, 10, &WorldRobotCalibRecorderNode::cubeCallback, this);
     stats_sub_ = nh_.subscribe(stats_topic_, 10, &WorldRobotCalibRecorderNode::statsCallback, this);
@@ -186,11 +183,13 @@ public:
              wait_after_sample_sec_);
     ROS_INFO("[CalibRecorder] 数据集输出: %s", output_dataset_csv_.c_str());
     ROS_INFO("[CalibRecorder] fused_topic=%s, stats_topic=%s", fused_topic_.c_str(), stats_topic_.c_str());
-    ROS_INFO("[CalibRecorder] online_solve=%s (调用 collect_sample 服务)", online_solve_ ? "true" : "false");
+    ROS_INFO("[CalibRecorder] TF lookup timeout: %.3f s", tf_lookup_timeout_sec_);
 
     waitForService();
     executeTrajectory();
 
+    ROS_INFO("[CalibRecorder] 丢弃样本：缺融合=%zu，无时间戳=%zu，TF失败=%zu", dropped_missing_cube_, dropped_missing_stamp_,
+             dropped_tf_fail_);
     ROS_INFO("[CalibRecorder] 已采集 %zu 行数据，保存到 %s。请运行离线脚本进行求解。", sample_id_, output_dataset_csv_.c_str());
   }
 
@@ -220,8 +219,7 @@ private:
   std::string cube_frame_;
   std::string base_frame_;
   std::string tool_frame_;
-  bool online_solve_ = false;
-  std::string collect_sample_service_ = "/collect_world_robot_sample";
+  double tf_lookup_timeout_sec_ = 0.1;
 
   std::string output_dataset_csv_;
   std::size_t sample_id_ = 0;
@@ -229,10 +227,13 @@ private:
   std::size_t target_index_ = 0;
   std::vector<CalibPoseRow> poses_;
   ros::ServiceClient linear_move_client_;
-  ros::ServiceClient collect_sample_client_;
   ros::Subscriber joint_state_sub_;
   ros::Subscriber fused_sub_;
   ros::Subscriber stats_sub_;
+
+  std::size_t dropped_missing_cube_ = 0;
+  std::size_t dropped_missing_stamp_ = 0;
+  std::size_t dropped_tf_fail_ = 0;
 
   std::vector<double> prev_joint_pos_;
   ros::Time last_joint_stamp_;
@@ -464,44 +465,23 @@ private:
     return false;
   }
 
-  bool triggerSample()
-  {
-    if (!online_solve_)
-    {
-      return true;
-    }
-
-    if (!collect_sample_client_.exists())
-    {
-      ROS_WARN("[CalibRecorder] collect_sample 服务未就绪，等待中... (%s)", collect_sample_service_.c_str());
-      collect_sample_client_.waitForExistence();
-    }
-
-    jaka_close_contro::WorldRobotCollectSample srv;
-    if (!collect_sample_client_.call(srv))
-    {
-      ROS_ERROR("[CalibRecorder] collect_sample 调用失败（通信错误）");
-      return false;
-    }
-
-    if (!srv.response.success)
-    {
-      ROS_WARN("[CalibRecorder] collect_sample 返回失败：%s", srv.response.message.c_str());
-      return false;
-    }
-
-    return true;
-  }
-
   bool fetchLatestSample(PoseSample &sample)
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
     if (!has_cube_)
     {
+      ++dropped_missing_cube_;
       return false;
     }
 
-    sample.stamp = latest_cube_.header.stamp.isZero() ? ros::Time::now() : latest_cube_.header.stamp;
+    if (latest_cube_.header.stamp.isZero())
+    {
+      ++dropped_missing_stamp_;
+      ROS_WARN_THROTTLE(1.0, "[CalibRecorder] 收到无时间戳的融合位姿，跳过样本");
+      return false;
+    }
+
+    sample.stamp = latest_cube_.header.stamp;
 
     tf2::Transform T_cc;
     tf2::fromMsg(latest_cube_.pose, T_cc);
@@ -542,17 +522,20 @@ private:
     return true;
   }
 
-  bool lookupBaseTool(tf2::Transform &T)
+  bool lookupBaseTool(tf2::Transform &T, const ros::Time &stamp)
   {
     try
     {
-      geometry_msgs::TransformStamped tf_msg = tf_buffer_.lookupTransform(base_frame_, tool_frame_, ros::Time(0));
+      geometry_msgs::TransformStamped tf_msg = tf_buffer_.lookupTransform(
+          base_frame_, tool_frame_, stamp, ros::Duration(tf_lookup_timeout_sec_));
       tf2::fromMsg(tf_msg.transform, T);
       return true;
     }
     catch (const tf2::TransformException &ex)
     {
-      ROS_WARN_THROTTLE(2.0, "[CalibRecorder] 无法获取 %s->%s TF：%s", base_frame_.c_str(), tool_frame_.c_str(), ex.what());
+      ++dropped_tf_fail_;
+      ROS_WARN_THROTTLE(2.0, "[CalibRecorder] 无法获取 %s->%s TF@%.3f：%s", base_frame_.c_str(), tool_frame_.c_str(),
+                        stamp.toSec(), ex.what());
       return false;
     }
   }
@@ -650,15 +633,14 @@ private:
       if (fetchLatestSample(s))
       {
         tf2::Transform T_bt;
-        if (lookupBaseTool(T_bt))
+        if (!lookupBaseTool(T_bt, s.stamp))
         {
-          s.T_base_tool = T_bt;
-          s.has_base_tool = true;
+          continue;
         }
-        if (triggerSample())
-        {
-          samples.push_back(s);
-        }
+
+        s.T_base_tool = T_bt;
+        s.has_base_tool = true;
+        samples.push_back(s);
       }
 
       rate.sleep();

@@ -2,12 +2,8 @@
 #include <ros/ros.h>
 #include <fiducial_msgs/FiducialTransformArray.h>
 #include <geometry_msgs/PoseStamped.h>
-#include <geometry_msgs/TransformStamped.h>
 #include <tf2/LinearMath/Transform.h>
-#include <tf2_ros/transform_broadcaster.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
 #include <yaml-cpp/yaml.h>
 #include <ros/package.h>
 #include <jaka_close_contro/cube_geometry_utils.h>
@@ -42,22 +38,13 @@ public:
       : nh_(nh), pnh_(pnh),
         camera_frame_default_("zed2i_left_camera_optical_frame"),
         cube_frame_("cube_center"),
-        tool_frame_("Link_6"),
-        has_iekf_state_(false),
-        has_tool_offset_(false),
-        publish_tool_tf_(false),
-        tf_buffer_(),
-        tf_listener_(tf_buffer_),
-        tf_broadcaster_()
+        has_iekf_state_(false)
   {
     const std::string default_faces_yaml = ros::package::getPath("jaka_close_contro") + "/config/cube_faces_current.yaml";
-    const std::string default_tool_offset_yaml = ros::package::getPath("jaka_close_contro") + "/config/tool_offset_current.yaml";
     pnh_.param<std::string>("faces_yaml", faces_yaml_path_, default_faces_yaml);
-    pnh_.param<std::string>("tool_offset_yaml", tool_offset_yaml_path_, default_tool_offset_yaml);
     pnh_.param<std::string>("fiducial_topic", fiducial_topic_, "/tool_fiducials");
     pnh_.param<std::string>("camera_frame_default", camera_frame_default_, "zed2i_left_camera_optical_frame");
     pnh_.param<std::string>("cube_frame", cube_frame_, "cube_center");
-    pnh_.param("publish_tool_tf", publish_tool_tf_, false);
 
     // 鲁棒融合参数
     pnh_.param("sigma_ang_deg", sigma_ang_deg_, 6.0);
@@ -78,18 +65,10 @@ public:
     ROS_INFO_STREAM("[Fusion] faces_yaml: " << faces_yaml_path_);
     ROS_INFO_STREAM("[Fusion] fiducial_topic: " << fiducial_topic_);
     ROS_INFO_STREAM("[Fusion] cube_frame: " << cube_frame_);
-    ROS_INFO("[Fusion] publish_tool_tf: %s", publish_tool_tf_ ? "true" : "false");
 
     if (faces_yaml_path_.empty() || !cube_geometry::loadFacesYaml(faces_yaml_path_, face2cube_))
     {
       ROS_ERROR("[Fusion] Failed to load faces YAML. Exiting.");
-      ros::shutdown();
-      return;
-    }
-
-    if (!loadToolOffsetYaml(tool_offset_yaml_path_))
-    {
-      ROS_ERROR("[Fusion] Failed to load tool_offset YAML. Exiting.");
       ros::shutdown();
       return;
     }
@@ -101,43 +80,6 @@ public:
   }
 
 private:
-  bool loadToolOffsetYaml(const std::string &path)
-  {
-    try
-    {
-      ROS_INFO("[Fusion] Loading tool offset YAML: %s", path.c_str());
-      YAML::Node root = YAML::LoadFile(path);
-      if (!root["tool_offset"] || !root["tool_offset"]["translation"] || !root["tool_offset"]["rotation"])
-      {
-        ROS_ERROR("[Fusion] tool_offset YAML 缺少必要字段");
-        return false;
-      }
-
-      auto trans = root["tool_offset"]["translation"];
-      auto rot = root["tool_offset"]["rotation"];
-      if (trans.size() != 3 || rot.size() != 4)
-      {
-        ROS_ERROR("[Fusion] tool_offset YAML 长度不匹配");
-        return false;
-      }
-
-      tool_offset_.setOrigin(tf2::Vector3(trans[0].as<double>(), trans[1].as<double>(), trans[2].as<double>()));
-      tf2::Quaternion q(rot[0].as<double>(), rot[1].as<double>(), rot[2].as<double>(), rot[3].as<double>());
-      q.normalize();
-      tool_offset_.setRotation(q);
-      has_tool_offset_ = true;
-
-      ROS_INFO("[Fusion] Tool offset loaded: trans=[%.3f, %.3f, %.3f], quat=[%.3f, %.3f, %.3f, %.3f]", trans[0].as<double>(),
-               trans[1].as<double>(), trans[2].as<double>(), q.x(), q.y(), q.z(), q.w());
-      return true;
-    }
-    catch (const std::exception &e)
-    {
-      ROS_ERROR("[Fusion] 读取 tool_offset YAML 失败: %s", e.what());
-      return false;
-    }
-  }
-
   // --------------- 数学工具 ---------------
   static double clamp(double v, double lo, double hi)
   {
@@ -648,31 +590,11 @@ private:
     q.normalize();
     Tn.setRotation(q);
 
-    geometry_msgs::TransformStamped tf_msg;
-    tf_msg.header.stamp = stamp;
-    tf_msg.header.frame_id = cam_frame;
-    tf_msg.child_frame_id = cube_frame_;
-    tf_msg.transform = tf2::toMsg(Tn);
-    tf_broadcaster_.sendTransform(tf_msg);
-
     geometry_msgs::PoseStamped pmsg;
-    pmsg.header = tf_msg.header;
-    pmsg.pose.position.x = tf_msg.transform.translation.x;
-    pmsg.pose.position.y = tf_msg.transform.translation.y;
-    pmsg.pose.position.z = tf_msg.transform.translation.z;
-    pmsg.pose.orientation = tf_msg.transform.rotation;
+    pmsg.header.stamp = stamp;
+    pmsg.header.frame_id = cam_frame;
+    pmsg.pose = tf2::toMsg(Tn);
     pub_.publish(pmsg);
-
-    if (publish_tool_tf_ && has_tool_offset_)
-    {
-      tf2::Transform T_tool = T_cube * tool_offset_;
-      geometry_msgs::TransformStamped tf_tool;
-      tf_tool.header.stamp = stamp;
-      tf_tool.header.frame_id = cam_frame;
-      tf_tool.child_frame_id = tool_frame_;
-      tf_tool.transform = tf2::toMsg(T_tool);
-      tf_broadcaster_.sendTransform(tf_tool);
-    }
   }
 
   // --------------- 成员 ---------------
@@ -680,22 +602,12 @@ private:
   ros::Subscriber sub_;
   ros::Publisher pub_;
   ros::Publisher stats_pub_;
-  tf2_ros::TransformBroadcaster tf_broadcaster_;
-
-  tf2_ros::Buffer tf_buffer_;
-  tf2_ros::TransformListener tf_listener_;
 
   std::map<int, tf2::Transform> face2cube_;
-  tf2::Transform tool_offset_;
-  bool has_tool_offset_;
-
   std::string faces_yaml_path_;
-  std::string tool_offset_yaml_path_;
   std::string fiducial_topic_;
   std::string camera_frame_default_;
   std::string cube_frame_;
-  std::string tool_frame_;
-  bool publish_tool_tf_;
 
   double sigma_ang_deg_;
   double sigma_pos_m_;

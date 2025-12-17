@@ -27,7 +27,6 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(yaml-cpp REQUIRED)
-find_package(Ceres REQUIRED)
 
 add_message_files(FILES
   CubeFusionStats.msg
@@ -71,7 +70,6 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${YAML_CPP_INCLUDE_DIR}
-  ${CERES_INCLUDE_DIRS}
 )
 
 # 1. 多尺寸 ArUco 检测器
@@ -104,53 +102,7 @@ add_dependencies(cube_multi_face_fusion_node ${${PROJECT_NAME}_EXPORTED_TARGETS}
 
 
 
-# 5. 闭环控制节点
-add_executable(closed_loop_control_node src/closed_loop_control_node.cpp)
-target_link_libraries(closed_loop_control_node
-  ${catkin_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-  ${EIGEN3_LIBRARIES}
-)
-
-# 6. 世界-机器人外参发布器
-add_executable(world_robot_extrinsic_broadcaster_node src/world_robot_extrinsic_broadcaster_node.cpp)
-target_link_libraries(world_robot_extrinsic_broadcaster_node
-  ${catkin_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-)
-
-# 6+. 世界系闭环观测/控制节点
-add_executable(cube_world_closedloop_node src/cube_world_closedloop_node.cpp)
-target_link_libraries(cube_world_closedloop_node
-  ${catkin_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-  ${EIGEN3_LIBRARIES}
-)
-
-# 7. 世界-机器人标定节点
-add_executable(world_robot_calibration_node src/world_robot_calibration_node.cpp)
-target_link_libraries(world_robot_calibration_node
-  ${catkin_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-  ${EIGEN3_LIBRARIES}
-  ${CERES_LIBRARIES}
-)
-add_dependencies(world_robot_calibration_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-
-# 8. 自动标定管理与运动执行
-add_executable(world_robot_autocalib_manager_node src/world_robot_autocalib_manager_node.cpp)
-target_link_libraries(world_robot_autocalib_manager_node
-  ${catkin_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-)
-add_dependencies(world_robot_autocalib_manager_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-
-add_executable(world_robot_calib_motion_node src/world_robot_calib_motion_node.cpp)
-target_link_libraries(world_robot_calib_motion_node
-  ${catkin_LIBRARIES}
-)
-add_dependencies(world_robot_calib_motion_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-
+# 5. 标定数据记录（离线求解）
 add_executable(world_robot_calib_recorder_node src/world_robot_calib_recorder_node.cpp)
 target_link_libraries(world_robot_calib_recorder_node
   ${catkin_LIBRARIES}
