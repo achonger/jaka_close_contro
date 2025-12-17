@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <deque>
 #include <algorithm>
 #include <numeric>
 
@@ -153,7 +154,11 @@ public:
     pnh_.param<std::string>("cube_frame", cube_frame_, std::string("cube_center"));
     pnh_.param<std::string>("base_frame", base_frame_, std::string("Link_0"));
     pnh_.param<std::string>("tool_frame", tool_frame_, std::string("Link_6"));
-    pnh_.param<double>("tf_lookup_timeout_sec", tf_lookup_timeout_sec_, 0.1);
+    pnh_.param<double>("tf_lookup_timeout_sec", tf_lookup_timeout_sec_, 0.5);
+    pnh_.param<double>("tf_latest_timeout_sec", tf_latest_timeout_sec_, 0.5);
+    pnh_.param<double>("sync_guard_sec", sync_guard_sec_, 0.03);
+    pnh_.param<double>("cube_queue_keep_sec", cube_queue_keep_sec_, 5.0);
+    pnh_.param<std::size_t>("cube_queue_max_len", cube_queue_max_len_, 500);
 
     pnh_.param<std::string>("output_dataset_csv", output_dataset_csv_, std::string(""));
     if (output_dataset_csv_.empty())
@@ -183,13 +188,15 @@ public:
              wait_after_sample_sec_);
     ROS_INFO("[CalibRecorder] 数据集输出: %s", output_dataset_csv_.c_str());
     ROS_INFO("[CalibRecorder] fused_topic=%s, stats_topic=%s", fused_topic_.c_str(), stats_topic_.c_str());
-    ROS_INFO("[CalibRecorder] TF lookup timeout: %.3f s", tf_lookup_timeout_sec_);
+    ROS_INFO("[CalibRecorder] TF lookup timeout: %.3f s, latest timeout: %.3f s, guard: %.3f s", tf_lookup_timeout_sec_,
+             tf_latest_timeout_sec_, sync_guard_sec_);
+    ROS_INFO("[CalibRecorder] cube_queue_keep=%.1f s, max_len=%zu", cube_queue_keep_sec_, cube_queue_max_len_);
 
     waitForService();
     executeTrajectory();
 
-    ROS_INFO("[CalibRecorder] 丢弃样本：缺融合=%zu，无时间戳=%zu，TF失败=%zu", dropped_missing_cube_, dropped_missing_stamp_,
-             dropped_tf_fail_);
+    ROS_INFO("[CalibRecorder] 丢弃样本：缺融合=%zu，无时间戳=%zu，无同步融合=%zu，TF失败=%zu", dropped_missing_cube_,
+             dropped_missing_stamp_, dropped_no_sync_cube_, dropped_tf_fail_);
     ROS_INFO("[CalibRecorder] 已采集 %zu 行数据，保存到 %s。请运行离线脚本进行求解。", sample_id_, output_dataset_csv_.c_str());
   }
 
@@ -219,7 +226,11 @@ private:
   std::string cube_frame_;
   std::string base_frame_;
   std::string tool_frame_;
-  double tf_lookup_timeout_sec_ = 0.1;
+  double tf_lookup_timeout_sec_ = 0.5;
+  double tf_latest_timeout_sec_ = 0.5;
+  double sync_guard_sec_ = 0.03;
+  double cube_queue_keep_sec_ = 5.0;
+  std::size_t cube_queue_max_len_ = 500;
 
   std::string output_dataset_csv_;
   std::size_t sample_id_ = 0;
@@ -234,6 +245,7 @@ private:
   std::size_t dropped_missing_cube_ = 0;
   std::size_t dropped_missing_stamp_ = 0;
   std::size_t dropped_tf_fail_ = 0;
+  std::size_t dropped_no_sync_cube_ = 0;
 
   std::vector<double> prev_joint_pos_;
   ros::Time last_joint_stamp_;
@@ -241,9 +253,9 @@ private:
   bool has_prev_joint_ = false;
   std::mutex joint_mutex_;
 
-  geometry_msgs::PoseStamped latest_cube_;
+  std::deque<geometry_msgs::PoseStamped> cube_queue_;
+  ros::Time last_used_cube_stamp_;
   jaka_close_contro::CubeFusionStats latest_stats_;
-  bool has_cube_ = false;
   bool has_stats_ = false;
   std::mutex data_mutex_;
 
@@ -309,9 +321,26 @@ private:
 
   void cubeCallback(const geometry_msgs::PoseStamped::ConstPtr &msg)
   {
+    if (msg->header.stamp.isZero())
+    {
+      ++dropped_missing_stamp_;
+      ROS_WARN_THROTTLE(1.0, "[CalibRecorder] 收到无时间戳的融合位姿，已丢弃");
+      return;
+    }
+
     std::lock_guard<std::mutex> lock(data_mutex_);
-    latest_cube_ = *msg;
-    has_cube_ = true;
+    const ros::Time now = ros::Time::now();
+    cube_queue_.push_back(*msg);
+
+    while (cube_queue_.size() > cube_queue_max_len_)
+    {
+      cube_queue_.pop_front();
+    }
+
+    while (!cube_queue_.empty() && (now - cube_queue_.front().header.stamp).toSec() > cube_queue_keep_sec_)
+    {
+      cube_queue_.pop_front();
+    }
   }
 
   void statsCallback(const jaka_close_contro::CubeFusionStats::ConstPtr &msg)
@@ -465,26 +494,83 @@ private:
     return false;
   }
 
-  bool fetchLatestSample(PoseSample &sample)
+  bool lookupLatestTfStamp(ros::Time &stamp)
+  {
+    try
+    {
+      const geometry_msgs::TransformStamped tf_msg = tf_buffer_.lookupTransform(
+          base_frame_, tool_frame_, ros::Time(0), ros::Duration(tf_latest_timeout_sec_));
+      stamp = tf_msg.header.stamp;
+      if (stamp.isZero())
+      {
+        stamp = ros::Time::now();
+        ROS_WARN_THROTTLE(1.0, "[CalibRecorder] 最新 TF 时间戳为 0，使用当前时间 %.3f 代替", stamp.toSec());
+      }
+      return true;
+    }
+    catch (const tf2::TransformException &ex)
+    {
+      ROS_WARN_THROTTLE(2.0, "[CalibRecorder] 查询最新 TF 时间失败：%s", ex.what());
+      ++dropped_tf_fail_;
+      return false;
+    }
+  }
+
+  bool selectSyncedCube(const ros::Time &cutoff, geometry_msgs::PoseStamped &selected,
+                        jaka_close_contro::CubeFusionStats &stats_copy, bool &stats_available)
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
-    if (!has_cube_)
+    if (cube_queue_.empty())
     {
       ++dropped_missing_cube_;
       return false;
     }
 
-    if (latest_cube_.header.stamp.isZero())
+    bool found = false;
+    for (auto it = cube_queue_.rbegin(); it != cube_queue_.rend(); ++it)
     {
-      ++dropped_missing_stamp_;
-      ROS_WARN_THROTTLE(1.0, "[CalibRecorder] 收到无时间戳的融合位姿，跳过样本");
+      if (it->header.stamp <= cutoff && it->header.stamp > last_used_cube_stamp_)
+      {
+        selected = *it;
+        found = true;
+        break;
+      }
+    }
+
+    if (!found)
+    {
+      ++dropped_no_sync_cube_;
       return false;
     }
 
-    sample.stamp = latest_cube_.header.stamp;
+    last_used_cube_stamp_ = selected.header.stamp;
+    stats_copy = latest_stats_;
+    stats_available = has_stats_;
+    return true;
+  }
+
+  bool fetchSyncedSample(PoseSample &sample, tf2::Transform &T_bt)
+  {
+    ros::Time tf_latest_stamp;
+    if (!lookupLatestTfStamp(tf_latest_stamp))
+    {
+      return false;
+    }
+
+    const ros::Time cutoff = tf_latest_stamp - ros::Duration(sync_guard_sec_);
+
+    geometry_msgs::PoseStamped chosen;
+    jaka_close_contro::CubeFusionStats stats_copy;
+    bool stats_available = false;
+    if (!selectSyncedCube(cutoff, chosen, stats_copy, stats_available))
+    {
+      return false;
+    }
+
+    sample.stamp = chosen.header.stamp;
 
     tf2::Transform T_cc;
-    tf2::fromMsg(latest_cube_.pose, T_cc);
+    tf2::fromMsg(chosen.pose, T_cc);
     tf2::Vector3 p = T_cc.getOrigin();
     tf2::Quaternion q = T_cc.getRotation();
     q.normalize();
@@ -493,9 +579,9 @@ private:
     sample.t_cam_cube = Eigen::Vector3d(p.x(), p.y(), p.z());
     sample.R_cam_cube = q_eig.toRotationMatrix();
 
-    sample.n_obs = has_stats_ ? latest_stats_.n_obs : 0;
-    sample.inliers = has_stats_ ? latest_stats_.inliers : 0;
-    if (has_stats_)
+    sample.n_obs = stats_available ? stats_copy.n_obs : 0;
+    sample.inliers = stats_available ? stats_copy.inliers : 0;
+    if (stats_available)
     {
       auto rms_vec = [](const std::vector<float> &vals) -> float {
         if (vals.empty())
@@ -510,13 +596,18 @@ private:
         return static_cast<float>(std::sqrt(accum / static_cast<double>(vals.size())));
       };
 
-      sample.pos_err_rms = rms_vec(latest_stats_.pos_err_m);
-      sample.ang_err_rms_deg = rms_vec(latest_stats_.ang_err_deg);
+      sample.pos_err_rms = rms_vec(stats_copy.pos_err_m);
+      sample.ang_err_rms_deg = rms_vec(stats_copy.ang_err_deg);
     }
     else
     {
       sample.pos_err_rms = 0.0f;
       sample.ang_err_rms_deg = 0.0f;
+    }
+
+    if (!lookupBaseTool(T_bt, sample.stamp))
+    {
+      return false;
     }
 
     return true;
@@ -526,6 +617,12 @@ private:
   {
     try
     {
+      if (!tf_buffer_.canTransform(base_frame_, tool_frame_, stamp, ros::Duration(tf_lookup_timeout_sec_)))
+      {
+        ++dropped_tf_fail_;
+        ROS_WARN_THROTTLE(2.0, "[CalibRecorder] TF %s->%s @ %.3f 不可用", base_frame_.c_str(), tool_frame_.c_str(), stamp.toSec());
+        return false;
+      }
       geometry_msgs::TransformStamped tf_msg = tf_buffer_.lookupTransform(
           base_frame_, tool_frame_, stamp, ros::Duration(tf_lookup_timeout_sec_));
       tf2::fromMsg(tf_msg.transform, T);
@@ -629,22 +726,18 @@ private:
 
     while (ros::ok() && (ros::Time::now() - sample_start).toSec() <= sample_duration_sec_)
     {
-      PoseSample s;
-      if (fetchLatestSample(s))
-      {
-        tf2::Transform T_bt;
-        if (!lookupBaseTool(T_bt, s.stamp))
-        {
-          continue;
-        }
+      ros::spinOnce();
 
+      PoseSample s;
+      tf2::Transform T_bt;
+      if (fetchSyncedSample(s, T_bt))
+      {
         s.T_base_tool = T_bt;
         s.has_base_tool = true;
         samples.push_back(s);
       }
 
       rate.sleep();
-      ros::spinOnce();
     }
 
     if (samples.empty())
