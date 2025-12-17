@@ -158,7 +158,13 @@ public:
     pnh_.param<double>("tf_latest_timeout_sec", tf_latest_timeout_sec_, 0.5);
     pnh_.param<double>("sync_guard_sec", sync_guard_sec_, 0.03);
     pnh_.param<double>("cube_queue_keep_sec", cube_queue_keep_sec_, 5.0);
-    pnh_.param<std::size_t>("cube_queue_max_len", cube_queue_max_len_, 500);
+    int cube_queue_max_len_param = static_cast<int>(cube_queue_max_len_);
+    pnh_.param<int>("cube_queue_max_len", cube_queue_max_len_param, 500);
+    if (cube_queue_max_len_param < 0)
+    {
+      cube_queue_max_len_param = 0;
+    }
+    cube_queue_max_len_ = static_cast<std::size_t>(cube_queue_max_len_param);
 
     pnh_.param<std::string>("output_dataset_csv", output_dataset_csv_, std::string(""));
     if (output_dataset_csv_.empty())
