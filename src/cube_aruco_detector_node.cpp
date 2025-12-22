@@ -289,9 +289,15 @@ private:
     for (const auto& kv : mappings) {
       int face_id = kv.first;
       const auto& ids = kv.second;
+      if (ids.size() != 4) {
+        ROS_WARN("[Detector] face_id=%d 的 GridBoard 内部IDs数量=%zu，期望4个，跳过",
+                 face_id, ids.size());
+        continue;
+      }
       cv::Ptr<cv::aruco::GridBoard> board = cv::aruco::GridBoard::create(
         2, 2, static_cast<float>(tool_marker_length_m_), static_cast<float>(tool_marker_separation_m_),
-        dictionary_tool_, ids);
+        dictionary_tool_, 0);
+      board->ids = ids;
       centerBoard(*board, tool_board_active_size_m_);
       tool_boards_[face_id] = board;
       for (int id : ids) {
