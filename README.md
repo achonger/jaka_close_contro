@@ -25,6 +25,16 @@
    ```
    脚本仅是占位符，需要自行实现手眼 / 世界-机器人外参求解，再写回 YAML。
 
+3. **多面融合 Debug 一键启动**
+   ```bash
+   roslaunch jaka_close_contro cube_fusion_debug.launch
+   ```
+   操作步骤：
+   - 启动后会依次拉起 ZED2i、`cube_aruco_detector_node`、`fiducial_relay_node`、`cube_multi_face_fusion_node`、`cube_fusion_debug_node`。
+   - 在终端查看融合输出 `/cube_center_fused`，以及 `cube_fusion_debug_node` 打印的逐面误差统计。
+   - 若需保存 CSV，可在 launch 中设置 `output_csv` 参数；默认输出到 `config/cube_fusion_debug.csv`。
+   - 若需要从 TF 获取融合位姿，可将 `fused_from_tf` 置为 `true`，并设置 `fused_frame` 为对应 TF 子坐标系名。
+
 ## 主要节点与话题
 
 - `cube_aruco_detector_node`
@@ -56,4 +66,3 @@
 - 融合节点不广播 TF，订阅方请直接使用 `/cube_center_fused` 的 `PoseStamped` 数据。
 - 录制节点严格使用融合消息的时间戳查 TF，`lookupTransform` 设置了 `~tf_lookup_timeout_sec`（默认 0.1 s）；时间戳缺失或 TF 不可用的样本会被丢弃并计数。
 - 仓库已移除“一键自动标定 / 闭环控制”相关节点与 launch，仅保留检测、融合、录制与调试功能。
-
