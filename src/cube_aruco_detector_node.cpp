@@ -10,7 +10,9 @@
 #include <opencv2/aruco.hpp>
 #include <opencv2/calib3d.hpp>
 #include <Eigen/Geometry>
+#include <algorithm>
 #include <map>
+#include <set>
 #include <vector>
 #include <sstream>
 #include <xmlrpcpp/XmlRpcValue.h>
@@ -25,6 +27,11 @@ public:
     pnh_.param<std::string>("fiducial_topic", fiducial_topic_, "/fiducial_transforms");
     pnh_.param("default_marker_size", default_marker_size_, 0.04); // 默认40mm
     pnh_.param<std::string>("dictionary", dictionary_name_, "DICT_4X4_50");
+    pnh_.param<std::string>("tool_dictionary", tool_dictionary_name_, "DICT_6X6_1000");
+    pnh_.param("tool_marker_length_m", tool_marker_length_m_, 0.0425);
+    pnh_.param("tool_marker_separation_m", tool_marker_separation_m_, 0.005);
+    pnh_.param("tool_board_active_size_m", tool_board_active_size_m_, -1.0);
+    pnh_.param("min_gridboard_markers", min_gridboard_markers_, 2);
 
     // 读取多尺寸配置
     XmlRpc::XmlRpcValue marker_sizes_param;
@@ -61,18 +68,21 @@ public:
     ROS_INFO_STREAM("[Detector] fiducial_topic: " << fiducial_topic_);
 
     // ArUco 配置
-    cv::aruco::PREDEFINED_DICTIONARY_NAME dict_id;
-    if (dictionary_name_ == "DICT_4X4_50") {
-      dict_id = cv::aruco::DICT_4X4_50;
-    } else if (dictionary_name_ == "DICT_4X4_100") {
-      dict_id = cv::aruco::DICT_4X4_100;
-    } else {
-      ROS_WARN("[Detector] Unknown dictionary '%s', fallback to DICT_4X4_50", dictionary_name_.c_str());
-      dict_id = cv::aruco::DICT_4X4_50;
-    }
-    dictionary_ = cv::aruco::getPredefinedDictionary(dict_id);
+    dictionary_world_ = cv::aruco::getPredefinedDictionary(parseDictionary(dictionary_name_));
+    dictionary_tool_ = cv::aruco::getPredefinedDictionary(parseDictionary(tool_dictionary_name_));
     detector_params_ = cv::aruco::DetectorParameters::create();
-    ROS_INFO("[Detector] Using ArUco dictionary %s", dictionary_name_.c_str());
+    ROS_INFO("[Detector] 使用 world 字典: %s", dictionary_name_.c_str());
+    ROS_INFO("[Detector] 使用 tool 字典: %s", tool_dictionary_name_.c_str());
+
+    if (tool_board_active_size_m_ <= 0.0) {
+      tool_board_active_size_m_ = 2.0 * tool_marker_length_m_ + tool_marker_separation_m_;
+    }
+    if (tool_board_active_size_m_ <= 0.0) {
+      ROS_WARN("[Detector] tool_board_active_size_m 非法，回退为 0.09");
+      tool_board_active_size_m_ = 0.09;
+    }
+
+    loadToolGridboards();
 
     // 订阅与发布
     caminfo_sub_ = nh_.subscribe(camera_info_topic_, 1, &CubeArucoDetector::cameraInfoCallback, this);
@@ -120,21 +130,29 @@ private:
 
     std::vector<std::vector<cv::Point2f>> corners;
     std::vector<int> ids;
-    cv::aruco::detectMarkers(gray, dictionary_, corners, ids, detector_params_);
+    std::vector<std::vector<cv::Point2f>> world_corners;
+    std::vector<int> world_ids;
+    std::vector<std::vector<cv::Point2f>> tool_corners;
+    std::vector<int> tool_ids;
+    cv::aruco::detectMarkers(gray, dictionary_world_, world_corners, world_ids, detector_params_);
+    cv::aruco::detectMarkers(gray, dictionary_tool_, tool_corners, tool_ids, detector_params_);
 
     fiducial_msgs::FiducialTransformArray out;
     out.header.stamp = msg->header.stamp;
     out.header.frame_id = cam_frame_id_;
     out.image_seq = msg->header.seq;
 
-    if (ids.empty()) {
+    if (world_ids.empty() && tool_ids.empty()) {
       ROS_DEBUG_THROTTLE(1.0, "[Detector] No markers detected");
       fid_pub_.publish(out);
       return;
     }
 
-    for (size_t i = 0; i < ids.size(); ++i) {
-      int id = ids[i];
+    for (size_t i = 0; i < world_ids.size(); ++i) {
+      int id = world_ids[i];
+      if (tool_marker_ids_.count(id) > 0) {
+        continue;
+      }
       double marker_size = default_marker_size_;
       
       auto size_it = marker_sizes_.find(id);
@@ -144,7 +162,7 @@ private:
 
       std::vector<cv::Vec3d> rvecs, tvecs;
       cv::aruco::estimatePoseSingleMarkers(
-        std::vector<std::vector<cv::Point2f>>{corners[i]},
+        std::vector<std::vector<cv::Point2f>>{world_corners[i]},
         marker_size,
         camera_matrix_,
         dist_coeffs_,
@@ -179,18 +197,45 @@ private:
       out.transforms.push_back(ft);
     }
 
-    fid_pub_.publish(out);
-    ROS_DEBUG_THROTTLE(1.0, "[Detector] Published %zu markers", out.transforms.size());
+    for (const auto& entry : tool_boards_) {
+      int face_id = entry.first;
+      const auto& board = entry.second;
+      cv::Vec3d rvec, tvec;
+      int used = cv::aruco::estimatePoseBoard(tool_corners, tool_ids, board, camera_matrix_, dist_coeffs_, rvec, tvec);
+      if (used < min_gridboard_markers_) {
+        continue;
+      }
 
-  if (!ids.empty()) {
-    std::stringstream ss;
-    ss << "Detected markers: ";
-    for (size_t i = 0; i < ids.size(); ++i) {
-    ss << "ID=" << ids[i];
-    if (i < ids.size()-1) ss << ", ";
+      cv::Mat R_cv;
+      cv::Rodrigues(rvec, R_cv);
+      Eigen::Matrix3d R;
+      for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+          R(r, c) = R_cv.at<double>(r, c);
+
+      Eigen::Quaterniond q(R);
+      float reproj_rms = computeBoardReprojError(board, tool_corners, tool_ids, rvec, tvec, camera_matrix_, dist_coeffs_);
+
+      fiducial_msgs::FiducialTransform ft;
+      ft.fiducial_id = face_id;
+      ft.fiducial_area = static_cast<float>(tool_board_active_size_m_ * tool_board_active_size_m_ * 1e6);
+      ft.image_error = 0.0f;
+      ft.object_error = reproj_rms;
+
+      ft.transform.translation.x = tvec[0];
+      ft.transform.translation.y = tvec[1];
+      ft.transform.translation.z = tvec[2];
+      ft.transform.rotation.x = q.x();
+      ft.transform.rotation.y = q.y();
+      ft.transform.rotation.z = q.z();
+      ft.transform.rotation.w = q.w();
+
+      out.transforms.push_back(ft);
     }
-    ROS_INFO("[Detector] %s", ss.str().c_str());
-}
+
+    fid_pub_.publish(out);
+    ROS_DEBUG_THROTTLE(1.0, "[Detector] Published %zu transforms (world=%zu, tool=%zu)",
+                       out.transforms.size(), world_ids.size(), tool_ids.size());
 
   }
 
@@ -202,14 +247,139 @@ private:
   bool have_cam_info_;
   std::string cam_frame_id_;
 
-  cv::Ptr<cv::aruco::Dictionary> dictionary_;
+  cv::Ptr<cv::aruco::Dictionary> dictionary_world_;
+  cv::Ptr<cv::aruco::Dictionary> dictionary_tool_;
   cv::Ptr<cv::aruco::DetectorParameters> detector_params_;
   std::string dictionary_name_;
+  std::string tool_dictionary_name_;
 
   double default_marker_size_;
   std::map<int, double> marker_sizes_;
 
   std::string image_topic_, camera_info_topic_, fiducial_topic_;
+
+  double tool_marker_length_m_;
+  double tool_marker_separation_m_;
+  double tool_board_active_size_m_;
+  int min_gridboard_markers_;
+
+  std::map<int, cv::Ptr<cv::aruco::GridBoard>> tool_boards_;
+  std::set<int> tool_marker_ids_;
+
+  static cv::aruco::PREDEFINED_DICTIONARY_NAME parseDictionary(const std::string& name) {
+    if (name == "DICT_4X4_50") return cv::aruco::DICT_4X4_50;
+    if (name == "DICT_4X4_100") return cv::aruco::DICT_4X4_100;
+    if (name == "DICT_6X6_1000") return cv::aruco::DICT_6X6_1000;
+    ROS_WARN("[Detector] 未识别字典 '%s'，回退 DICT_4X4_50", name.c_str());
+    return cv::aruco::DICT_4X4_50;
+  }
+
+  void loadToolGridboards() {
+    tool_boards_.clear();
+    tool_marker_ids_.clear();
+
+    std::map<int, std::vector<int>> mappings;
+    if (!loadToolGridboardsParam(mappings)) {
+      mappings[10] = {0, 1, 2, 3};
+      mappings[11] = {10, 11, 12, 13};
+      mappings[12] = {20, 21, 22, 23};
+      mappings[13] = {30, 31, 32, 33};
+    }
+
+    for (const auto& kv : mappings) {
+      int face_id = kv.first;
+      const auto& ids = kv.second;
+      cv::Ptr<cv::aruco::GridBoard> board = cv::aruco::GridBoard::create(
+        2, 2, static_cast<float>(tool_marker_length_m_), static_cast<float>(tool_marker_separation_m_),
+        dictionary_tool_, ids);
+      centerBoard(*board, tool_board_active_size_m_);
+      tool_boards_[face_id] = board;
+      for (int id : ids) {
+        tool_marker_ids_.insert(id);
+      }
+      ROS_INFO("[Detector] GridBoard face_id=%d 内部IDs=%zu", face_id, ids.size());
+    }
+  }
+
+  bool loadToolGridboardsParam(std::map<int, std::vector<int>>& mappings) {
+    XmlRpc::XmlRpcValue param;
+    if (!pnh_.getParam("tool_gridboards", param)) {
+      return false;
+    }
+    if (param.getType() != XmlRpc::XmlRpcValue::TypeStruct) {
+      ROS_WARN("[Detector] tool_gridboards 不是字典类型，忽略");
+      return false;
+    }
+    for (XmlRpc::XmlRpcValue::iterator it = param.begin(); it != param.end(); ++it) {
+      int face_id = 0;
+      try {
+        face_id = std::stoi(it->first);
+      } catch (const std::exception& e) {
+        ROS_WARN("[Detector] tool_gridboards 键解析失败: %s", it->first.c_str());
+        continue;
+      }
+      if (it->second.getType() != XmlRpc::XmlRpcValue::TypeArray) {
+        ROS_WARN("[Detector] tool_gridboards[%s] 不是数组", it->first.c_str());
+        continue;
+      }
+      std::vector<int> ids;
+      for (int i = 0; i < it->second.size(); ++i) {
+        if (it->second[i].getType() == XmlRpc::XmlRpcValue::TypeInt) {
+          ids.push_back(static_cast<int>(it->second[i]));
+        } else {
+          ROS_WARN("[Detector] tool_gridboards[%s] 存在非整型元素", it->first.c_str());
+        }
+      }
+      if (ids.empty()) {
+        continue;
+      }
+      mappings[face_id] = ids;
+    }
+    return !mappings.empty();
+  }
+
+  static void centerBoard(cv::aruco::GridBoard& board, double active_size) {
+    const float shift = static_cast<float>(active_size * 0.5);
+    for (auto& marker_pts : board.objPoints) {
+      for (auto& pt : marker_pts) {
+        pt.x -= shift;
+        pt.y -= shift;
+      }
+    }
+  }
+
+  static float computeBoardReprojError(const cv::Ptr<cv::aruco::GridBoard>& board,
+                                       const std::vector<std::vector<cv::Point2f>>& corners,
+                                       const std::vector<int>& ids,
+                                       const cv::Vec3d& rvec,
+                                       const cv::Vec3d& tvec,
+                                       const cv::Mat& camera_matrix,
+                                       const cv::Mat& dist_coeffs) {
+    double total_sq = 0.0;
+    int total_points = 0;
+    for (size_t i = 0; i < ids.size(); ++i) {
+      int id = ids[i];
+      auto it = std::find(board->ids.begin(), board->ids.end(), id);
+      if (it == board->ids.end()) {
+        continue;
+      }
+      size_t idx = static_cast<size_t>(std::distance(board->ids.begin(), it));
+      std::vector<cv::Point2f> proj;
+      cv::projectPoints(board->objPoints[idx], rvec, tvec, camera_matrix, dist_coeffs, proj);
+      if (proj.size() != corners[i].size()) {
+        continue;
+      }
+      for (size_t k = 0; k < proj.size(); ++k) {
+        cv::Point2f diff = proj[k] - corners[i][k];
+        total_sq += diff.dot(diff);
+        total_points++;
+      }
+    }
+    if (total_points == 0) {
+      return 0.0f;
+    }
+    return static_cast<float>(std::sqrt(total_sq / total_points));
+  }
 };
 
 int main(int argc, char** argv) {
