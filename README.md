@@ -3,9 +3,10 @@
 本仓库提供基于 ROS1 Noetic 的 JAKA Zu3 视觉检测与标定数据录制管线。核心特点：
 
 - **多面融合**：`cube_multi_face_fusion_node` 读取 ArUco 棱方体各面的 YAML 几何，输出相机系下的 `/cube_center_fused` (`PoseStamped`)，默认不广播 TF、也不依赖工具外参。
-- **同步采样录制**：`world_robot_calib_recorder_node` 按 CSV 轨迹驱动机械臂，使用融合结果的时间戳查 `base->tool` TF，生成离线标定数据集，遇到无时间戳/TF 不可用的样本会直接丢弃并计数。
+- **同步采样录制**：`world_robot_calib_recorder_node` 按 CSV 轨迹驱动机械臂，使用融合结果的时间戳同步查询 `base->tool` 与 `world->camera` TF，生成离线标定数据集，遇到无时间戳/TF 不可用的样本会直接丢弃并计数。
 - **离线求解入口**：`scripts/world_robot_calib_offline.py` 保留了世界-机器人/工具外参离线求解的模板（需自行填入算法）。
 - **官方 URDF**：`launch/jaka_sdk_bringup.launch` 启动 JAKA SDK 驱动与 `robot_state_publisher`，默认帧 `Link_0`（基座）、`Link_6`（法兰）。
+- **世界坐标系**：默认使用 2×2 GridBoard（IDs 500-503）输出 `fiducial_id=500`，`world_tag_node` 以此发布 `world -> camera` TF。
 
 ## 快速上手
 
@@ -42,16 +43,16 @@
   - 输出：`/fiducial_transforms`。
 - `fiducial_relay_node`
   - 输入：`/fiducial_transforms`。
-  - 输出：`/world_fiducials`（ID=0）、`/tool_fiducials`（ID=10/11/12/13）。
+  - 输出：`/world_fiducials`（ID=500）、`/tool_fiducials`（ID=10/11/12/13）。
 - `world_tag_node`
-  - 输入：`/world_fiducials`。
+  - 输入：`/world_fiducials`（默认 fiducial_id=500 来自世界 2×2 GridBoard）。
   - 输出：平滑的 `world -> camera` TF。
 - `cube_multi_face_fusion_node`
   - 输入：`/tool_fiducials`；参数：`faces_yaml`（默认 `config/cube_faces_current.yaml`）。
   - 输出：`/cube_center_fused` (`PoseStamped`，frame_id 为相机光学系) 及融合统计 `/cube_fusion_stats`。不再广播 TF，也不依赖 `tool_offset`。
 - `world_robot_calib_recorder_node`
-  - 输入：`/cube_center_fused`、`/cube_fusion_stats`、TF `base->tool`、`/joint_states`；参数：轨迹 CSV、采样窗口、TF 查询超时等。
-  - 输出：离线标定数据集 CSV（按融合时间戳查询 TF，同步写入）。
+  - 输入：`/cube_center_fused`、`/cube_fusion_stats`、TF `base->tool`、`world->camera`、`/joint_states`；参数：轨迹 CSV、采样窗口、TF 查询超时等。
+  - 输出：离线标定数据集 CSV（按融合时间戳同步写入 base->tool 与 world->camera）。
 - `cube_fusion_debug_node`
   - 功能：逐面反推 `camera->cube_center`、与融合结果对比，发布调试 TF（tag、per-face cube、fused）并可写 CSV。
 

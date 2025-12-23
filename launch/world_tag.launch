@@ -1,7 +1,7 @@
 <launch>
   <node name="world_tag_node" pkg="jaka_world_tag" type="world_tag_node" output="screen">
     <!-- 世界 Tag ID（您生成的 ID=0） -->
-    <param name="world_fiducial_id" value="0" />
+    <param name="world_fiducial_id" value="500" />
 
     <!-- fiducial 检测话题（由 aruco_detect 或 apriltag_ros 发布） -->
     <param name="fiducial_topic" value="/fiducial_transforms" />

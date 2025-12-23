@@ -39,6 +39,8 @@ struct PoseSample
   Eigen::Matrix3d R_cam_cube{Eigen::Matrix3d::Identity()};
   tf2::Transform T_base_tool;
   bool has_base_tool = false;
+  tf2::Transform T_world_cam;
+  bool has_world_cam = false;
   int n_obs = 0;
   int inliers = 0;
   float pos_err_rms = 0.0f;
@@ -152,9 +154,11 @@ public:
     pnh_.param<std::string>("stats_topic", stats_topic_, std::string("/cube_fusion_stats"));
     pnh_.param<std::string>("camera_frame", camera_frame_, std::string("zed2i_left_camera_optical_frame"));
     pnh_.param<std::string>("cube_frame", cube_frame_, std::string("cube_center"));
+    pnh_.param<std::string>("world_frame", world_frame_, std::string("world"));
     pnh_.param<std::string>("base_frame", base_frame_, std::string("Link_0"));
     pnh_.param<std::string>("tool_frame", tool_frame_, std::string("Link_6"));
     pnh_.param<double>("tf_lookup_timeout_sec", tf_lookup_timeout_sec_, 0.5);
+    pnh_.param<double>("world_tf_lookup_timeout_sec", world_tf_lookup_timeout_sec_, 0.1);
     pnh_.param<double>("tf_latest_timeout_sec", tf_latest_timeout_sec_, 0.5);
     pnh_.param<double>("sync_guard_sec", sync_guard_sec_, 0.03);
     pnh_.param<double>("cube_queue_keep_sec", cube_queue_keep_sec_, 5.0);
@@ -197,12 +201,15 @@ public:
     ROS_INFO("[CalibRecorder] TF lookup timeout: %.3f s, latest timeout: %.3f s, guard: %.3f s", tf_lookup_timeout_sec_,
              tf_latest_timeout_sec_, sync_guard_sec_);
     ROS_INFO("[CalibRecorder] cube_queue_keep=%.1f s, max_len=%zu", cube_queue_keep_sec_, cube_queue_max_len_);
+    ROS_INFO("[CalibRecorder] world_frame=%s, world_tf_lookup_timeout=%.3f s", world_frame_.c_str(),
+             world_tf_lookup_timeout_sec_);
 
     waitForService();
     executeTrajectory();
 
-    ROS_INFO("[CalibRecorder] 丢弃样本：缺融合=%zu，无时间戳=%zu，无同步融合=%zu，TF失败=%zu", dropped_missing_cube_,
-             dropped_missing_stamp_, dropped_no_sync_cube_, dropped_tf_fail_);
+    ROS_INFO("[CalibRecorder] 丢弃样本：缺融合=%zu，无时间戳=%zu，无同步融合=%zu，TF失败=%zu，世界TF失败=%zu",
+             dropped_missing_cube_, dropped_missing_stamp_, dropped_no_sync_cube_, dropped_tf_fail_,
+             dropped_world_tf_fail_);
     ROS_INFO("[CalibRecorder] 已采集 %zu 行数据，保存到 %s。请运行离线脚本进行求解。", sample_id_, output_dataset_csv_.c_str());
   }
 
@@ -230,9 +237,11 @@ private:
   std::string stats_topic_;
   std::string camera_frame_;
   std::string cube_frame_;
+  std::string world_frame_;
   std::string base_frame_;
   std::string tool_frame_;
   double tf_lookup_timeout_sec_ = 0.5;
+  double world_tf_lookup_timeout_sec_ = 0.1;
   double tf_latest_timeout_sec_ = 0.5;
   double sync_guard_sec_ = 0.03;
   double cube_queue_keep_sec_ = 5.0;
@@ -252,6 +261,7 @@ private:
   std::size_t dropped_missing_stamp_ = 0;
   std::size_t dropped_tf_fail_ = 0;
   std::size_t dropped_no_sync_cube_ = 0;
+  std::size_t dropped_world_tf_fail_ = 0;
 
   std::vector<double> prev_joint_pos_;
   ros::Time last_joint_stamp_;
@@ -272,6 +282,8 @@ private:
     fout.precision(6);
     fout << "sample_id,pose_idx,stamp,cam_frame,cube_frame,cam_cube_tx,cam_cube_ty,cam_cube_tz,cam_cube_qx,cam_cube_qy,cam_cube_qz,cam_cube_qw,";
     fout << "base_frame,tool_frame,base_tool_tx,base_tool_ty,base_tool_tz,base_tool_qx,base_tool_qy,base_tool_qz,base_tool_qw,";
+    fout << "world_frame,camera_frame,world_cam_tx,world_cam_ty,world_cam_tz,world_cam_qx,world_cam_qy,world_cam_qz,world_cam_qw,";
+    fout << "world_cube_tx,world_cube_ty,world_cube_tz,world_cube_qx,world_cube_qy,world_cube_qz,world_cube_qw,";
     fout << "num_faces,inliers,pos_err_rms,ang_err_rms_deg,note\n";
     fout.close();
   }
@@ -616,6 +628,12 @@ private:
       return false;
     }
 
+    if (!lookupWorldCam(sample.T_world_cam, sample.stamp))
+    {
+      return false;
+    }
+    sample.has_world_cam = true;
+
     return true;
   }
 
@@ -639,6 +657,31 @@ private:
       ++dropped_tf_fail_;
       ROS_WARN_THROTTLE(2.0, "[CalibRecorder] 无法获取 %s->%s TF@%.3f：%s", base_frame_.c_str(), tool_frame_.c_str(),
                         stamp.toSec(), ex.what());
+      return false;
+    }
+  }
+
+  bool lookupWorldCam(tf2::Transform &T, const ros::Time &stamp)
+  {
+    try
+    {
+      if (!tf_buffer_.canTransform(world_frame_, camera_frame_, stamp, ros::Duration(world_tf_lookup_timeout_sec_)))
+      {
+        ++dropped_world_tf_fail_;
+        ROS_WARN_THROTTLE(2.0, "[CalibRecorder] TF %s->%s @ %.3f 不可用", world_frame_.c_str(),
+                          camera_frame_.c_str(), stamp.toSec());
+        return false;
+      }
+      geometry_msgs::TransformStamped tf_msg = tf_buffer_.lookupTransform(
+          world_frame_, camera_frame_, stamp, ros::Duration(world_tf_lookup_timeout_sec_));
+      tf2::fromMsg(tf_msg.transform, T);
+      return true;
+    }
+    catch (const tf2::TransformException &ex)
+    {
+      ++dropped_world_tf_fail_;
+      ROS_WARN_THROTTLE(2.0, "[CalibRecorder] 无法获取 %s->%s TF@%.3f：%s", world_frame_.c_str(),
+                        camera_frame_.c_str(), stamp.toSec(), ex.what());
       return false;
     }
   }
@@ -724,6 +767,43 @@ private:
     R_mean = averageRotation(rotations, weights);
   }
 
+  void computeMeanWorldCam(const std::vector<PoseSample> &samples, Eigen::Vector3d &t_mean, Eigen::Matrix3d &R_mean,
+                           std::size_t &count)
+  {
+    std::vector<Eigen::Vector3d> translations;
+    std::vector<Eigen::Matrix3d> rotations;
+    for (const auto &s : samples)
+    {
+      if (!s.has_world_cam)
+      {
+        continue;
+      }
+      tf2::Vector3 t = s.T_world_cam.getOrigin();
+      tf2::Quaternion q = s.T_world_cam.getRotation();
+      q.normalize();
+      translations.emplace_back(t.x(), t.y(), t.z());
+      rotations.emplace_back(Eigen::Quaterniond(q.w(), q.x(), q.y(), q.z()).toRotationMatrix());
+    }
+
+    count = translations.size();
+    if (translations.empty())
+    {
+      t_mean.setZero();
+      R_mean.setIdentity();
+      return;
+    }
+
+    t_mean = Eigen::Vector3d::Zero();
+    for (const auto &t : translations)
+    {
+      t_mean += t;
+    }
+    t_mean /= static_cast<double>(translations.size());
+
+    std::vector<double> weights(rotations.size(), 1.0);
+    R_mean = averageRotation(rotations, weights);
+  }
+
   bool collectSampleWindow(std::size_t pose_index, const std::string &pose_name)
   {
     const ros::Time sample_start = ros::Time::now();
@@ -763,6 +843,11 @@ private:
     std::size_t bt_count = 0;
     computeMeanBaseTool(samples, t_mean_bt, R_mean_bt, bt_count);
 
+    Eigen::Vector3d t_mean_wc;
+    Eigen::Matrix3d R_mean_wc;
+    std::size_t wc_count = 0;
+    computeMeanWorldCam(samples, t_mean_wc, R_mean_wc, wc_count);
+
     const double stamp_mean = std::accumulate(samples.begin(), samples.end(), 0.0,
                                               [](double acc, const PoseSample &s)
                                               { return acc + s.stamp.toSec(); }) /
@@ -777,6 +862,13 @@ private:
     q_cam.normalize();
     Eigen::Quaterniond q_bt(R_mean_bt);
     q_bt.normalize();
+    Eigen::Quaterniond q_wc(R_mean_wc);
+    q_wc.normalize();
+
+    Eigen::Vector3d t_world_cube = t_mean_wc + R_mean_wc * t_mean_cam;
+    Eigen::Matrix3d R_world_cube = R_mean_wc * R_mean_cam;
+    Eigen::Quaterniond q_world_cube(R_world_cube);
+    q_world_cube.normalize();
 
     std::ofstream fout(output_dataset_csv_, std::ios::out | std::ios::app);
     fout.setf(std::ios::fixed);
@@ -787,12 +879,17 @@ private:
          << base_frame_ << "," << tool_frame_ << ","
          << t_mean_bt.x() << "," << t_mean_bt.y() << "," << t_mean_bt.z() << ","
          << q_bt.x() << "," << q_bt.y() << "," << q_bt.z() << "," << q_bt.w() << ","
+         << world_frame_ << "," << camera_frame_ << ","
+         << t_mean_wc.x() << "," << t_mean_wc.y() << "," << t_mean_wc.z() << ","
+         << q_wc.x() << "," << q_wc.y() << "," << q_wc.z() << "," << q_wc.w() << ","
+         << t_world_cube.x() << "," << t_world_cube.y() << "," << t_world_cube.z() << ","
+         << q_world_cube.x() << "," << q_world_cube.y() << "," << q_world_cube.z() << "," << q_world_cube.w() << ","
          << avg_obs << "," << avg_inliers << "," << pos_rms << "," << (ang_rms * 180.0 / M_PI) << ","
          << pose_name << "\n";
     fout.close();
 
-    ROS_INFO("[CalibRecorder] 记录姿态 #%zu (%s)：%zu 样本，pos_rms=%.4f m, ang_rms=%.2f deg, base_tool样本=%zu", pose_index + 1,
-             pose_name.c_str(), samples.size(), pos_rms, ang_rms * 180.0 / M_PI, bt_count);
+    ROS_INFO("[CalibRecorder] 记录姿态 #%zu (%s)：%zu 样本，pos_rms=%.4f m, ang_rms=%.2f deg, base_tool样本=%zu, world_cam样本=%zu",
+             pose_index + 1, pose_name.c_str(), samples.size(), pos_rms, ang_rms * 180.0 / M_PI, bt_count, wc_count);
 
     return true;
   }

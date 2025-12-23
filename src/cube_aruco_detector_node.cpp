@@ -33,6 +33,13 @@ public:
     pnh_.param("tool_board_active_size_m", tool_board_active_size_m_, -1.0);
     pnh_.param("min_gridboard_markers", min_gridboard_markers_, 2);
 
+    pnh_.param("world_board_enable", world_board_enable_, true);
+    pnh_.param("world_board_output_id", world_board_output_id_, 500);
+    pnh_.param("world_board_marker_length_m", world_board_marker_length_m_, 0.0525);
+    pnh_.param("world_board_marker_separation_m", world_board_marker_separation_m_, 0.005);
+    pnh_.param("world_board_min_markers", world_board_min_markers_, 2);
+    pnh_.param("enable_single_world_markers", enable_single_world_markers_, false);
+
     // 读取多尺寸配置
     XmlRpc::XmlRpcValue marker_sizes_param;
     if (pnh_.hasParam("marker_sizes")) {
@@ -83,6 +90,7 @@ public:
     }
 
     loadToolGridboards();
+    loadWorldGridboard();
 
     // 订阅与发布
     caminfo_sub_ = nh_.subscribe(camera_info_topic_, 1, &CubeArucoDetector::cameraInfoCallback, this);
@@ -134,7 +142,9 @@ private:
     std::vector<int> world_ids;
     std::vector<std::vector<cv::Point2f>> tool_corners;
     std::vector<int> tool_ids;
-    cv::aruco::detectMarkers(gray, dictionary_world_, world_corners, world_ids, detector_params_);
+    if (enable_single_world_markers_) {
+      cv::aruco::detectMarkers(gray, dictionary_world_, world_corners, world_ids, detector_params_);
+    }
     cv::aruco::detectMarkers(gray, dictionary_tool_, tool_corners, tool_ids, detector_params_);
 
     fiducial_msgs::FiducialTransformArray out;
@@ -148,53 +158,55 @@ private:
       return;
     }
 
-    for (size_t i = 0; i < world_ids.size(); ++i) {
-      int id = world_ids[i];
-      if (tool_marker_ids_.count(id) > 0) {
-        continue;
+    if (enable_single_world_markers_) {
+      for (size_t i = 0; i < world_ids.size(); ++i) {
+        int id = world_ids[i];
+        if (tool_marker_ids_.count(id) > 0) {
+          continue;
+        }
+        double marker_size = default_marker_size_;
+
+        auto size_it = marker_sizes_.find(id);
+        if (size_it != marker_sizes_.end()) {
+          marker_size = size_it->second;
+        }
+
+        std::vector<cv::Vec3d> rvecs, tvecs;
+        cv::aruco::estimatePoseSingleMarkers(
+          std::vector<std::vector<cv::Point2f>>{world_corners[i]},
+          marker_size,
+          camera_matrix_,
+          dist_coeffs_,
+          rvecs,
+          tvecs
+        );
+
+        if (rvecs.empty() || tvecs.empty()) continue;
+
+        cv::Mat R_cv;
+        cv::Rodrigues(rvecs[0], R_cv);
+        Eigen::Matrix3d R;
+        for (int r = 0; r < 3; ++r)
+          for (int c = 0; c < 3; ++c)
+            R(r, c) = R_cv.at<double>(r, c);
+
+        Eigen::Quaterniond q(R);
+
+        fiducial_msgs::FiducialTransform ft;
+        ft.fiducial_id = id;
+        ft.fiducial_area = static_cast<float>(marker_size * marker_size * 1e6);
+        ft.image_error = 0.0f;
+
+        ft.transform.translation.x = tvecs[0][0];
+        ft.transform.translation.y = tvecs[0][1];
+        ft.transform.translation.z = tvecs[0][2];
+        ft.transform.rotation.x = q.x();
+        ft.transform.rotation.y = q.y();
+        ft.transform.rotation.z = q.z();
+        ft.transform.rotation.w = q.w();
+
+        out.transforms.push_back(ft);
       }
-      double marker_size = default_marker_size_;
-      
-      auto size_it = marker_sizes_.find(id);
-      if (size_it != marker_sizes_.end()) {
-        marker_size = size_it->second;
-      }
-
-      std::vector<cv::Vec3d> rvecs, tvecs;
-      cv::aruco::estimatePoseSingleMarkers(
-        std::vector<std::vector<cv::Point2f>>{world_corners[i]},
-        marker_size,
-        camera_matrix_,
-        dist_coeffs_,
-        rvecs,
-        tvecs
-      );
-
-      if (rvecs.empty() || tvecs.empty()) continue;
-
-      cv::Mat R_cv;
-      cv::Rodrigues(rvecs[0], R_cv);
-      Eigen::Matrix3d R;
-      for (int r = 0; r < 3; ++r)
-        for (int c = 0; c < 3; ++c)
-          R(r, c) = R_cv.at<double>(r, c);
-      
-      Eigen::Quaterniond q(R);
-
-      fiducial_msgs::FiducialTransform ft;
-      ft.fiducial_id = id;
-      ft.fiducial_area = static_cast<float>(marker_size * marker_size * 1e6);
-      ft.image_error = 0.0f;
-
-      ft.transform.translation.x = tvecs[0][0];
-      ft.transform.translation.y = tvecs[0][1];
-      ft.transform.translation.z = tvecs[0][2];
-      ft.transform.rotation.x = q.x();
-      ft.transform.rotation.y = q.y();
-      ft.transform.rotation.z = q.z();
-      ft.transform.rotation.w = q.w();
-
-      out.transforms.push_back(ft);
     }
 
     for (const auto& entry : tool_boards_) {
@@ -233,6 +245,43 @@ private:
       out.transforms.push_back(ft);
     }
 
+    if (world_board_enable_ && world_board_) {
+      cv::Vec3d rvec, tvec;
+      int used = cv::aruco::estimatePoseBoard(tool_corners, tool_ids, world_board_,
+                                              camera_matrix_, dist_coeffs_, rvec, tvec);
+      if (used >= world_board_min_markers_) {
+        cv::Mat R_cv;
+        cv::Rodrigues(rvec, R_cv);
+        Eigen::Matrix3d R;
+        for (int r = 0; r < 3; ++r)
+          for (int c = 0; c < 3; ++c)
+            R(r, c) = R_cv.at<double>(r, c);
+
+        Eigen::Vector3d t(tvec[0], tvec[1], tvec[2]);
+        Eigen::Vector3d offset(world_board_center_offset_.x, world_board_center_offset_.y, 0.0);
+        Eigen::Vector3d t_center = t + R * offset;
+        Eigen::Quaterniond q(R);
+        float reproj_rms = computeBoardReprojError(world_board_, tool_corners, tool_ids, rvec, tvec,
+                                                   camera_matrix_, dist_coeffs_);
+
+        fiducial_msgs::FiducialTransform ft;
+        ft.fiducial_id = world_board_output_id_;
+        ft.fiducial_area = static_cast<float>(world_board_active_size_m_ * world_board_active_size_m_ * 1e6);
+        ft.image_error = 0.0f;
+        ft.object_error = reproj_rms;
+
+        ft.transform.translation.x = t_center.x();
+        ft.transform.translation.y = t_center.y();
+        ft.transform.translation.z = t_center.z();
+        ft.transform.rotation.x = q.x();
+        ft.transform.rotation.y = q.y();
+        ft.transform.rotation.z = q.z();
+        ft.transform.rotation.w = q.w();
+
+        out.transforms.push_back(ft);
+      }
+    }
+
     fid_pub_.publish(out);
     ROS_DEBUG_THROTTLE(1.0, "[Detector] Published %zu transforms (world=%zu, tool=%zu)",
                        out.transforms.size(), world_ids.size(), tool_ids.size());
@@ -263,8 +312,20 @@ private:
   double tool_board_active_size_m_;
   int min_gridboard_markers_;
 
+  bool world_board_enable_ = true;
+  int world_board_output_id_ = 500;
+  double world_board_marker_length_m_ = 0.0525;
+  double world_board_marker_separation_m_ = 0.005;
+  int world_board_min_markers_ = 2;
+  bool enable_single_world_markers_ = false;
+
   std::map<int, cv::Ptr<cv::aruco::GridBoard>> tool_boards_;
   std::set<int> tool_marker_ids_;
+
+  cv::Ptr<cv::aruco::GridBoard> world_board_;
+  std::vector<int> world_board_marker_ids_;
+  double world_board_active_size_m_ = 0.0;
+  cv::Point2f world_board_center_offset_{0.0f, 0.0f};
 
   static cv::aruco::PREDEFINED_DICTIONARY_NAME parseDictionary(const std::string& name) {
     if (name == "DICT_4X4_50") return cv::aruco::DICT_4X4_50;
@@ -305,6 +366,38 @@ private:
       }
       ROS_INFO("[Detector] GridBoard face_id=%d 内部IDs=%zu", face_id, ids.size());
     }
+  }
+
+  void loadWorldGridboard() {
+    world_board_.release();
+    world_board_marker_ids_.clear();
+
+    XmlRpc::XmlRpcValue param;
+    if (pnh_.getParam("world_board_marker_ids", param) && param.getType() == XmlRpc::XmlRpcValue::TypeArray) {
+      for (int i = 0; i < param.size(); ++i) {
+        if (param[i].getType() == XmlRpc::XmlRpcValue::TypeInt) {
+          world_board_marker_ids_.push_back(static_cast<int>(param[i]));
+        }
+      }
+    }
+    if (world_board_marker_ids_.empty()) {
+      world_board_marker_ids_ = {500, 501, 502, 503};
+    }
+
+    world_board_active_size_m_ = 2.0 * world_board_marker_length_m_ + world_board_marker_separation_m_;
+    world_board_center_offset_ = cv::Point2f(static_cast<float>(world_board_active_size_m_ * 0.5),
+                                             static_cast<float>(world_board_active_size_m_ * 0.5));
+
+    if (world_board_marker_ids_.size() != 4) {
+      ROS_WARN("[Detector] 世界板 marker IDs 数量=%zu，期望 4 个，将禁用世界板输出", world_board_marker_ids_.size());
+      return;
+    }
+
+    world_board_ = cv::aruco::GridBoard::create(
+      2, 2, static_cast<float>(world_board_marker_length_m_),
+      static_cast<float>(world_board_marker_separation_m_),
+      dictionary_tool_, 0);
+    world_board_->ids = world_board_marker_ids_;
   }
 
   bool loadToolGridboardsParam(std::map<int, std::vector<int>>& mappings) {

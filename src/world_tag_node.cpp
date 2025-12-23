@@ -14,7 +14,7 @@ class WorldTagNode {
 public:
   WorldTagNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
     : nh_(nh), pnh_(pnh), has_prev_(false) {
-    pnh_.param("world_fiducial_id", world_id_, 0);
+    pnh_.param("world_fiducial_id", world_id_, 500);
     pnh_.param<std::string>("fiducial_topic", fiducial_topic_, "/world_fiducials");
     pnh_.param<std::string>("world_frame", world_frame_, "world");
     pnh_.param<std::string>("camera_frame", camera_frame_, "zed2i_left_camera_optical_frame");
