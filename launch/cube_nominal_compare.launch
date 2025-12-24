@@ -31,7 +31,7 @@
 
   <!-- 补充世界坐标系定义（world -> camera），供 base->cam 计算使用 -->
   <node pkg="jaka_close_contro" type="world_tag_node" name="world_tag_node" output="screen">
-    <param name="world_fiducial_id" value="500" />
+    <param name="world_id" type="int" value="500" />
     <param name="fiducial_topic"    value="/world_fiducials" />
     <param name="world_frame"       value="world" />
     <param name="camera_frame"      value="zed2i_left_camera_optical_frame" />

@@ -46,11 +46,11 @@
   </node>
 
   <node pkg="jaka_close_contro" type="fiducial_relay_node" name="fiducial_relay" output="screen">
-    <param name="world_id" value="500" />
+    <param name="world_id" type="int" value="500" />
     <rosparam param="tool_ids">["10", "11", "12", "13"]</rosparam>
     <param name="input_topic" value="/fiducial_transforms" />
-    <param name="world_topic" value="/world_fiducials" />
-    <param name="tool_topic" value="/tool_fiducials" />
+    <param name="output_world_topic" value="/world_fiducials" />
+    <param name="output_tool_topic" value="/tool_fiducials" />
   </node>
 
   <!-- 3. 多面融合 -->

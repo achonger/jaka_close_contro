@@ -9,10 +9,12 @@
 #include <algorithm>
 #include <string>
 #include <cstdlib>
+#include <sstream>
+#include <xmlrpcpp/XmlRpcValue.h>
 
 class FiducialRelay {
 public:
-  FiducialRelay(ros::NodeHandle& nh, ros::NodeHandle& pnh) {
+  FiducialRelay(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh_(pnh) {
     // 读取 world_id (支持字符串和整数)
     if (pnh_.hasParam("world_id")) {
       std::string world_id_str;
@@ -86,18 +88,30 @@ public:
 
     // 读取话题名称
     pnh_.param<std::string>("input_topic", input_topic_, "/fiducial_transforms");
-    pnh_.param<std::string>("world_topic", world_topic_, "/world_fiducials");
-    pnh_.param<std::string>("tool_topic", tool_topic_, "/tool_fiducials");
-
-    ROS_INFO("[Relay] world_id = %d", world_id_);
-    ROS_INFO("[Relay] tool_ids = [");
-    for (size_t i = 0; i < tool_ids_.size(); ++i) {
-      ROS_INFO("  %d%s", tool_ids_[i], (i < tool_ids_.size() - 1) ? "," : "");
+    pnh_.param<std::string>("output_world_topic", world_topic_, std::string(""));
+    pnh_.param<std::string>("output_tool_topic", tool_topic_, std::string(""));
+    if (world_topic_.empty()) {
+      pnh_.param<std::string>("world_topic", world_topic_, "/world_fiducials");
     }
-    ROS_INFO("]");
-    ROS_INFO("[Relay] input: %s", input_topic_.c_str());
-    ROS_INFO("[Relay] world output: %s", world_topic_.c_str());
-    ROS_INFO("[Relay] tool output: %s", tool_topic_.c_str());
+    if (tool_topic_.empty()) {
+      pnh_.param<std::string>("tool_topic", tool_topic_, "/tool_fiducials");
+    }
+
+    std::ostringstream tool_ids_ss;
+    tool_ids_ss << "[";
+    for (size_t i = 0; i < tool_ids_.size(); ++i) {
+      tool_ids_ss << tool_ids_[i];
+      if (i + 1 < tool_ids_.size()) {
+        tool_ids_ss << ", ";
+      }
+    }
+    tool_ids_ss << "]";
+
+    ROS_INFO("[Relay] input_topic=%s", input_topic_.c_str());
+    ROS_INFO("[Relay] output_world_topic=%s", world_topic_.c_str());
+    ROS_INFO("[Relay] output_tool_topic=%s", tool_topic_.c_str());
+    ROS_INFO("[Relay] world_id=%d", world_id_);
+    ROS_INFO("[Relay] tool_ids=%s", tool_ids_ss.str().c_str());
 
     sub_ = nh_.subscribe(input_topic_, 1, &FiducialRelay::callback, this);
     world_pub_ = nh_.advertise<fiducial_msgs::FiducialTransformArray>(world_topic_, 1);
@@ -124,6 +138,10 @@ private:
 
     world_pub_.publish(world_msg);
     tool_pub_.publish(tool_msg);
+
+    if (world_msg.transforms.empty()) {
+      ROS_WARN_THROTTLE(1.0, "[Relay] World fiducial ID=%d not found in input", world_id_);
+    }
   }
 
   ros::NodeHandle nh_, pnh_;
