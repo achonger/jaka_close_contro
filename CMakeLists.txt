@@ -124,13 +124,6 @@ target_link_libraries(cube_fusion_debug_node
 )
 add_dependencies(cube_fusion_debug_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-add_executable(cube_nominal_compare_node src/cube_nominal_compare_node.cpp)
-target_link_libraries(cube_nominal_compare_node
-  ${catkin_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-)
-add_dependencies(cube_nominal_compare_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-
 # 安装配置文件
 install(DIRECTORY launch config rviz
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}

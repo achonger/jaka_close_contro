@@ -62,7 +62,7 @@
 - `src/world_tag_node.cpp`：订阅 `/world_fiducials` 中的 world_id（默认 500），求逆得到 `world->camera` TF 并做指数滑动平均后广播。
 - `src/cube_multi_face_fusion_node.cpp`：基于李群/李代数的鲁棒多面融合与 IEKF 时序平滑，输出 `/cube_center_fused` PoseStamped 及统计，不依赖 tool_offset。
 - `src/cube_fusion_debug_node.cpp`：对每个面逐面反推 `camera->cube`，与融合结果比较，发布调试 TF、打印误差并可选写 CSV。
-- `src/cube_nominal_compare_node.cpp`：将实时检测到的面位姿与 nominal faces YAML 对比，输出误差用于快速几何校核。
+- （已移除）`cube_nominal_compare_node`：原用于面位姿与 nominal 对比的自检功能已删除。
 - `src/world_robot_calib_recorder_node.cpp`：按轨迹驱动机械臂，窗口内对 `cam->cube`、`base->tool`、`world->camera` 做李群均值，同步落盘 CSV（含 world_cam/world_cube）。
 - `include/jaka_close_contro/cube_geometry_utils.h`：面几何解析与 TF 构造工具函数，供融合与调试节点共享。
 
