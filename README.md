@@ -56,6 +56,16 @@
 - `cube_fusion_debug_node`
   - 功能：逐面反推 `camera->cube_center`、与融合结果对比，发布调试 TF（tag、per-face cube、fused）并可写 CSV。
 
+## 主要 CPP 文件功能概览
+- `src/cube_aruco_detector_node.cpp`：使用世界/工具两套 ArUco 字典，检测世界 2×2 GridBoard（ID=500 输出）与工具面 GridBoard（映射为 10/11/12/13），填充 `FiducialTransformArray` 并输出重投影误差。
+- `src/fiducial_relay_node.cpp`：将 `/fiducial_transforms` 按 world_id、tool_ids 分流到 `/world_fiducials` 与 `/tool_fiducials`，带参数日志与缺失告警。
+- `src/world_tag_node.cpp`：订阅 `/world_fiducials` 中的 world_id（默认 500），求逆得到 `world->camera` TF 并做指数滑动平均后广播。
+- `src/cube_multi_face_fusion_node.cpp`：基于李群/李代数的鲁棒多面融合与 IEKF 时序平滑，输出 `/cube_center_fused` PoseStamped 及统计，不依赖 tool_offset。
+- `src/cube_fusion_debug_node.cpp`：对每个面逐面反推 `camera->cube`，与融合结果比较，发布调试 TF、打印误差并可选写 CSV。
+- `src/cube_nominal_compare_node.cpp`：将实时检测到的面位姿与 nominal faces YAML 对比，输出误差用于快速几何校核。
+- `src/world_robot_calib_recorder_node.cpp`：按轨迹驱动机械臂，窗口内对 `cam->cube`、`base->tool`、`world->camera` 做李群均值，同步落盘 CSV（含 world_cam/world_cube）。
+- `include/jaka_close_contro/cube_geometry_utils.h`：面几何解析与 TF 构造工具函数，供融合与调试节点共享。
+
 ## 配置文件
 
 - `config/cube_faces_current.yaml`：立方体各面几何（`id`、`translation`、`rpy_deg`）。
