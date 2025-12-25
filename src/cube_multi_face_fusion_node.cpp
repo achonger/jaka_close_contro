@@ -68,7 +68,7 @@ public:
     ROS_INFO_STREAM("[Fusion] faces_yaml: " << faces_yaml_path_);
     ROS_INFO_STREAM("[Fusion] fiducial_topic: " << fiducial_topic_);
     ROS_INFO_STREAM("[Fusion] cube_frame: " << cube_frame_);
-    ROS_INFO_STREAM("[Fusion] robot_id=%d, robot_stride=%d, face_id_base=%d", robot_id_, robot_stride_, face_id_base_);
+    ROS_INFO("[Fusion] robot_id=%d, robot_stride=%d, face_id_base=%d", robot_id_, robot_stride_, face_id_base_);
 
     if (faces_yaml_path_.empty() || !cube_geometry::loadFacesYaml(faces_yaml_path_, face2cube_))
     {
