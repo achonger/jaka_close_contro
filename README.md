@@ -12,7 +12,7 @@
 
 1. **启动录制链路（采集，不在线解算）**
    ```bash
-   roslaunch jaka_close_contro world_robot_calib_record.launch
+   roslaunch jaka_close_contro world_robot_calib_record.launch robot_name:=jaka1
    ```
    - 输出数据：`config/world_robot_calib_dataset_<time>.csv`（可用 `~output_dataset_csv` 覆盖）。
    - 节点依次运动到 `config/jaka1_world_robot_calibration_pose.csv` 中的姿态，在稳定窗口内对 `/cube_center_fused` 做李群均值，并用同一时间戳查询 `base->tool` TF；若视觉时间戳缺失或 TF 查询失败则跳过该样本并累加丢弃计数。

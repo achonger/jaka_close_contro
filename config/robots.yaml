@@ -2,12 +2,28 @@ robots:
   jaka1:
     ip: "192.168.1.100"
     calib_pose_csv: "config/jaka1_world_robot_calibration_pose.csv"
+    base_frame: "Link_0"
+    tool_frame: "Link_6"
+    dataset_out_dir: "config"
+    default_offline_yaml: "config/world_robot_extrinsic_jaka1.yaml"
   jaka2:
     ip: "192.168.1.101"
     calib_pose_csv: "config/jaka2_world_robot_calibration_pose.csv"
+    base_frame: "Link_0"
+    tool_frame: "Link_6"
+    dataset_out_dir: "config"
+    default_offline_yaml: "config/world_robot_extrinsic_jaka2.yaml"
   jaka3:
     ip: "192.168.1.102"
     calib_pose_csv: "config/jaka3_world_robot_calibration_pose.csv"
+    base_frame: "Link_0"
+    tool_frame: "Link_6"
+    dataset_out_dir: "config"
+    default_offline_yaml: "config/world_robot_extrinsic_jaka3.yaml"
   jaka4:
     ip: "192.168.1.103"
     calib_pose_csv: "config/jaka4_world_robot_calibration_pose.csv"
+    base_frame: "Link_0"
+    tool_frame: "Link_6"
+    dataset_out_dir: "config"
+    default_offline_yaml: "config/world_robot_extrinsic_jaka4.yaml"

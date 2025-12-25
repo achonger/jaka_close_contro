@@ -8,6 +8,7 @@
 #include <jaka_close_contro/CubeFusionStats.h>
 
 #include <Eigen/Dense>
+#include <filesystem>
 
 #include <cmath>
 #include <fstream>
@@ -139,6 +140,8 @@ public:
     pnh_.param<std::string>("calib_pose_csv", calib_pose_csv_,
                             ros::package::getPath("jaka_close_contro") + "/config/jaka1_world_robot_calibration_pose.csv");
     pnh_.param<std::string>("linear_move_service", linear_move_service_, std::string("jaka_driver/linear_move"));
+    pnh_.param<bool>("use_driver", use_driver_, true);
+    pnh_.param<bool>("do_motion", do_motion_, true);
     pnh_.param<double>("speed_scale", speed_scale_, 0.15);
     pnh_.param<double>("linear_speed_mm_s", linear_speed_mm_s_, 80.0);
     pnh_.param<double>("linear_acc_mm_s2", linear_acc_mm_s2_, 200.0);
@@ -171,11 +174,14 @@ public:
     cube_queue_max_len_ = static_cast<std::size_t>(cube_queue_max_len_param);
 
     pnh_.param<std::string>("output_dataset_csv", output_dataset_csv_, std::string(""));
+    pnh_.param<std::string>("output_dir", output_dir_, ros::package::getPath("jaka_close_contro") + "/config");
+    pnh_.param<std::string>("output_prefix", output_prefix_, std::string("world_robot_calib_dataset"));
     if (output_dataset_csv_.empty())
     {
       const ros::Time now = ros::Time::now();
       const std::string stamp = std::to_string(static_cast<long long>(now.toSec()));
-      output_dataset_csv_ = ros::package::getPath("jaka_close_contro") + "/config/world_robot_calib_dataset_" + stamp + "_" + arm_name_ + ".csv";
+      std::filesystem::create_directories(output_dir_);
+      output_dataset_csv_ = output_dir_ + "/" + output_prefix_ + "_" + stamp + "_" + arm_name_ + ".csv";
     }
 
     linear_move_client_ = nh_.serviceClient<jaka_msgs::Move>(linear_move_service_);
@@ -197,6 +203,7 @@ public:
     ROS_INFO("[CalibRecorder] 采样窗口：前等待 %.2f s，窗口 %.2f s，后等待 %.2f s", wait_before_sample_sec_, sample_duration_sec_,
              wait_after_sample_sec_);
     ROS_INFO("[CalibRecorder] 数据集输出: %s", output_dataset_csv_.c_str());
+    ROS_INFO("[CalibRecorder] use_driver=%s, do_motion=%s", use_driver_ ? "true" : "false", do_motion_ ? "true" : "false");
     ROS_INFO("[CalibRecorder] fused_topic=%s, stats_topic=%s", fused_topic_.c_str(), stats_topic_.c_str());
     ROS_INFO("[CalibRecorder] TF lookup timeout: %.3f s, latest timeout: %.3f s, guard: %.3f s", tf_lookup_timeout_sec_,
              tf_latest_timeout_sec_, sync_guard_sec_);
@@ -222,6 +229,8 @@ private:
   std::string arm_name_;
   std::string calib_pose_csv_;
   std::string linear_move_service_;
+  bool use_driver_ = true;
+  bool do_motion_ = true;
   double speed_scale_ = 0.15;
   double linear_speed_mm_s_ = 80.0;
   double linear_acc_mm_s2_ = 200.0;
@@ -248,6 +257,8 @@ private:
   std::size_t cube_queue_max_len_ = 500;
 
   std::string output_dataset_csv_;
+  std::string output_dir_;
+  std::string output_prefix_;
   std::size_t sample_id_ = 0;
 
   std::size_t target_index_ = 0;
@@ -290,6 +301,10 @@ private:
 
   void waitForService()
   {
+    if (!use_driver_) {
+      ROS_WARN("[CalibRecorder] use_driver=false，跳过服务检查");
+      return;
+    }
     while (ros::ok())
     {
       if (ros::service::waitForService(linear_move_service_, ros::Duration(1.0)))
@@ -430,6 +445,10 @@ private:
 
   bool sendLinearTarget(const CalibPoseRow &target)
   {
+    if (!use_driver_ || !do_motion_) {
+      ROS_INFO("[CalibRecorder] use_driver/do_motion=false，跳过运动发送");
+      return true;
+    }
     const double DEG2RAD = M_PI / 180.0;
     jaka_msgs::Move srv;
     srv.request.pose = {static_cast<float>(target.x_mm), static_cast<float>(target.y_mm), static_cast<float>(target.z_mm),
@@ -910,17 +929,22 @@ private:
                                                                      << "), rpy(deg)=(" << p.rx_deg << ", " << p.ry_deg << ", "
                                                                      << p.rz_deg << ")");
 
-      if (!sendLinearTarget(p))
-      {
-        ROS_ERROR("[CalibRecorder] 姿态 %s 发送失败，停止后续执行", p.name.c_str());
-        break;
+      if (do_motion_) {
+        if (!sendLinearTarget(p))
+        {
+          ROS_ERROR("[CalibRecorder] 姿态 %s 发送失败，停止后续执行", p.name.c_str());
+          break;
+        }
+
+        ROS_INFO("[CalibRecorder] 等待机器人停止运动...");
+        waitRobotMotionDone(motion_done_timeout_sec_);
+
+        ROS_INFO_STREAM("[CalibRecorder] 机器人静止，采样前等待 " << wait_before_sample_sec_ << " s");
+        ros::Duration(wait_before_sample_sec_).sleep();
+      } else {
+        ROS_WARN("[CalibRecorder] do_motion=false，跳过自动运动，请手动摆位后等待采样窗口");
+        ros::Duration(wait_before_sample_sec_).sleep();
       }
-
-      ROS_INFO("[CalibRecorder] 等待机器人停止运动...");
-      waitRobotMotionDone(motion_done_timeout_sec_);
-
-      ROS_INFO_STREAM("[CalibRecorder] 机器人静止，采样前等待 " << wait_before_sample_sec_ << " s");
-      ros::Duration(wait_before_sample_sec_).sleep();
 
       ROS_INFO_STREAM("[CalibRecorder] 开始采样窗口（姿态 #" << (i + 1) << ", 持续 " << sample_duration_sec_ << " s）");
       collectSampleWindow(i, p.name);
