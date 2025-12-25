@@ -42,9 +42,12 @@ public:
   {
     const std::string default_faces_yaml = ros::package::getPath("jaka_close_contro") + "/config/cube_faces_current.yaml";
     pnh_.param<std::string>("faces_yaml", faces_yaml_path_, default_faces_yaml);
-    pnh_.param<std::string>("fiducial_topic", fiducial_topic_, "/tool_fiducials");
+    pnh_.param<std::string>("fiducial_topic", fiducial_topic_, "tool_fiducials");
     pnh_.param<std::string>("camera_frame_default", camera_frame_default_, "zed2i_left_camera_optical_frame");
     pnh_.param<std::string>("cube_frame", cube_frame_, "cube_center");
+    pnh_.param("robot_id", robot_id_, 1);
+    pnh_.param("robot_stride", robot_stride_, 100);
+    pnh_.param("face_id_base", face_id_base_, 10);
 
     // 鲁棒融合参数
     pnh_.param("sigma_ang_deg", sigma_ang_deg_, 6.0);
@@ -65,6 +68,7 @@ public:
     ROS_INFO_STREAM("[Fusion] faces_yaml: " << faces_yaml_path_);
     ROS_INFO_STREAM("[Fusion] fiducial_topic: " << fiducial_topic_);
     ROS_INFO_STREAM("[Fusion] cube_frame: " << cube_frame_);
+    ROS_INFO_STREAM("[Fusion] robot_id=%d, robot_stride=%d, face_id_base=%d", robot_id_, robot_stride_, face_id_base_);
 
     if (faces_yaml_path_.empty() || !cube_geometry::loadFacesYaml(faces_yaml_path_, face2cube_))
     {
@@ -72,6 +76,7 @@ public:
       ros::shutdown();
       return;
     }
+    applyRobotOffset();
 
     sub_ = nh_.subscribe<fiducial_msgs::FiducialTransformArray>(
         fiducial_topic_, 1, &CubeMultiFaceFusion::callback, this);
@@ -611,6 +616,9 @@ private:
   ros::Publisher stats_pub_;
 
   std::map<int, tf2::Transform> face2cube_;
+  int robot_id_{1};
+  int robot_stride_{100};
+  int face_id_base_{10};
   std::string faces_yaml_path_;
   std::string fiducial_topic_;
   std::string camera_frame_default_;
@@ -634,6 +642,22 @@ private:
   tf2::Transform iekf_X_;
   ros::Time iekf_last_stamp_;
   Eigen::Matrix<double, 6, 6> iekf_P_;
+
+  void applyRobotOffset()
+  {
+    std::map<int, tf2::Transform> shifted;
+    int robot_off = (robot_id_ - 1) * robot_stride_;
+    for (const auto &kv : face2cube_)
+    {
+      int new_id = kv.first + robot_off;
+      shifted[new_id] = kv.second;
+      tf2::Vector3 t = kv.second.getOrigin();
+      tf2::Quaternion q = kv.second.getRotation();
+      ROS_INFO("[Fusion] face id %d -> %d (robot_off=%d), trans=[%.3f, %.3f, %.3f]",
+               kv.first, new_id, robot_off, t.x(), t.y(), t.z());
+    }
+    face2cube_.swap(shifted);
+  }
 };
 
 int main(int argc, char **argv)

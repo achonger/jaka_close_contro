@@ -32,6 +32,17 @@ public:
     pnh_.param("tool_marker_separation_m", tool_marker_separation_m_, 0.005);
     pnh_.param("tool_board_active_size_m", tool_board_active_size_m_, -1.0);
     pnh_.param("min_gridboard_markers", min_gridboard_markers_, 2);
+    pnh_.param("robot_stride", robot_stride_, 100);
+    pnh_.param("id_step", id_step_, 10);
+    pnh_.param("face_id_base", face_id_base_, 10);
+    pnh_.param("num_faces", num_faces_, 4);
+    pnh_.param("markers_per_face", markers_per_face_, 4);
+    if (pnh_.hasParam("robot_ids")) {
+      pnh_.getParam("robot_ids", robot_ids_param_);
+    } else {
+      robot_ids_param_.clear();
+      robot_ids_param_.push_back(1);
+    }
 
     pnh_.param("world_board_enable", world_board_enable_, true);
     pnh_.param("world_board_output_id", world_board_output_id_, 500);
@@ -311,6 +322,12 @@ private:
   double tool_marker_separation_m_;
   double tool_board_active_size_m_;
   int min_gridboard_markers_;
+  int robot_stride_{100};
+  int id_step_{10};
+  int face_id_base_{10};
+  int num_faces_{4};
+  int markers_per_face_{4};
+  std::vector<int> robot_ids_param_;
 
   bool world_board_enable_ = true;
   int world_board_output_id_ = 500;
@@ -340,11 +357,9 @@ private:
     tool_marker_ids_.clear();
 
     std::map<int, std::vector<int>> mappings;
-    if (!loadToolGridboardsParam(mappings)) {
-      mappings[10] = {0, 1, 2, 3};
-      mappings[11] = {10, 11, 12, 13};
-      mappings[12] = {20, 21, 22, 23};
-      mappings[13] = {30, 31, 32, 33};
+    bool has_param = loadToolGridboardsParam(mappings);
+    if (!has_param) {
+      mappings = generateDefaultToolBoards();
     }
 
     for (const auto& kv : mappings) {
@@ -435,6 +450,40 @@ private:
       mappings[face_id] = ids;
     }
     return !mappings.empty();
+  }
+
+  std::map<int, std::vector<int>> generateDefaultToolBoards() {
+    std::map<int, std::vector<int>> mappings;
+    std::vector<int> robots;
+    robots.reserve(robot_ids_param_.size());
+    for (const auto &v : robot_ids_param_) {
+      robots.push_back(v);
+    }
+    if (robots.empty()) {
+      robots.push_back(1);
+    }
+
+    for (int rid : robots) {
+      int robot_off = (rid - 1) * robot_stride_;
+      for (int k = 0; k < num_faces_; ++k) {
+        int face_id = face_id_base_ + k + robot_off;
+        int marker_base = k * id_step_ + robot_off;
+        std::vector<int> ids;
+        for (int m = 0; m < markers_per_face_; ++m) {
+          ids.push_back(marker_base + m);
+        }
+        mappings[face_id] = ids;
+        std::ostringstream oss;
+        oss << "[";
+        for (size_t i = 0; i < ids.size(); ++i) {
+          oss << ids[i];
+          if (i + 1 < ids.size()) oss << ",";
+        }
+        oss << "]";
+        ROS_INFO("[Detector] robot=%d face_id=%d ids=%s", rid, face_id, oss.str().c_str());
+      }
+    }
+    return mappings;
   }
 
   static void centerBoard(cv::aruco::GridBoard& board, double active_size) {

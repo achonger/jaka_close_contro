@@ -12,19 +12,19 @@
 
 1. **启动录制链路（采集，不在线解算）**
    ```bash
-   roslaunch jaka_close_contro world_robot_calib_record.launch robot_name:=jaka1
+   # 选择要录制的机械臂（jaka1~jaka4），可覆盖姿态 CSV
+   roslaunch jaka_close_contro world_robot_calib_record.launch robot_name:=jaka1 calib_pose_csv:=<可选CSV>
    ```
    - 输出数据：`config/world_robot_calib_dataset_<time>.csv`（可用 `~output_dataset_csv` 覆盖）。
    - 节点依次运动到 `config/jaka1_world_robot_calibration_pose.csv` 中的姿态，在稳定窗口内对 `/cube_center_fused` 做李群均值，并用同一时间戳查询 `base->tool` TF；若视觉时间戳缺失或 TF 查询失败则跳过该样本并累加丢弃计数。
 
 2. **离线求解（模板）**
    ```bash
-   rosrun jaka_close_contro world_robot_calib_offline.py \
-       --input config/world_robot_calib_dataset_xxx.csv \
-       --output-world-robot config/world_robot_extrinsic.yaml \
-       --output-tool-offset config/tool_offset_current.yaml
+   python3 scripts/world_robot_calib_offline.py --mode world_base --robot_name jaka1 \
+       --source_csv config/world_robot_calib_dataset_xxx_jaka1.csv \
+       --output_yaml config/world_robot_extrinsic_jaka1.yaml
    ```
-   脚本仅是占位符，需要自行实现手眼 / 世界-机器人外参求解，再写回 YAML。
+   脚本仅是占位符，需要自行实现 world_base 求解（可用 world_cam/world_cube + base_tool 数据）。
 
 3. **多面融合 Debug 一键启动**
    ```bash
