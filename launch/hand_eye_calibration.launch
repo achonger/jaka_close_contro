@@ -1,7 +1,0 @@
-<launch>
-  <!--
-    提示：原有“相机-末端手眼标定”流程已废弃。
-    请直接使用 world_robot_calibration.launch 完成世界->机器人基座标定。
-  -->
-  <include file="$(find jaka_close_contro)/launch/world_robot_calibration.launch" />
-</launch>

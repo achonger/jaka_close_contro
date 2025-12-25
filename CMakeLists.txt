@@ -102,50 +102,12 @@ add_dependencies(cube_multi_face_fusion_node ${${PROJECT_NAME}_EXPORTED_TARGETS}
 
 
 
-# 5. 闭环控制节点
-add_executable(closed_loop_control_node src/closed_loop_control_node.cpp)
-target_link_libraries(closed_loop_control_node
-  ${catkin_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-  ${EIGEN3_LIBRARIES}
-)
-
-# 6. 世界-机器人外参发布器
-add_executable(world_robot_extrinsic_broadcaster_node src/world_robot_extrinsic_broadcaster_node.cpp)
-target_link_libraries(world_robot_extrinsic_broadcaster_node
-  ${catkin_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-)
-
-# 6+. 世界系闭环观测/控制节点
-add_executable(cube_world_closedloop_node src/cube_world_closedloop_node.cpp)
-target_link_libraries(cube_world_closedloop_node
-  ${catkin_LIBRARIES}
-  ${EIGEN3_LIBRARIES}
-)
-
-# 7. 世界-机器人标定节点
-add_executable(world_robot_calibration_node src/world_robot_calibration_node.cpp)
-target_link_libraries(world_robot_calibration_node
-  ${catkin_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-  ${EIGEN3_LIBRARIES}
-)
-add_dependencies(world_robot_calibration_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-
-# 8. 自动标定管理与运动执行
-add_executable(world_robot_autocalib_manager_node src/world_robot_autocalib_manager_node.cpp)
-target_link_libraries(world_robot_autocalib_manager_node
-  ${catkin_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-)
-add_dependencies(world_robot_autocalib_manager_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-
-add_executable(world_robot_calib_motion_node src/world_robot_calib_motion_node.cpp)
-target_link_libraries(world_robot_calib_motion_node
+# 5. 标定数据记录（离线求解）
+add_executable(world_robot_calib_recorder_node src/world_robot_calib_recorder_node.cpp)
+target_link_libraries(world_robot_calib_recorder_node
   ${catkin_LIBRARIES}
 )
-add_dependencies(world_robot_calib_motion_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_dependencies(world_robot_calib_recorder_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 # 9. 关节状态适配（jaka_driver -> /joint_states）
 add_executable(jaka_state_adapter_node src/jaka_state_adapter_node.cpp)
@@ -162,14 +124,11 @@ target_link_libraries(cube_fusion_debug_node
 )
 add_dependencies(cube_fusion_debug_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-add_executable(cube_nominal_compare_node src/cube_nominal_compare_node.cpp)
-target_link_libraries(cube_nominal_compare_node
-  ${catkin_LIBRARIES}
-  ${YAML_CPP_LIBRARIES}
-)
-add_dependencies(cube_nominal_compare_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-
 # 安装配置文件
 install(DIRECTORY launch config rviz
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)
+
+install(DIRECTORY include/
+  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
 )
