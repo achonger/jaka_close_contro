@@ -15,76 +15,10 @@
 class FiducialRelay {
 public:
   FiducialRelay(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh_(pnh) {
-    // 读取 world_id (支持字符串和整数)
-    if (pnh_.hasParam("world_id")) {
-      std::string world_id_str;
-      if (pnh_.getParam("world_id", world_id_str)) {
-        // 尝试转换为整数
-        try {
-          world_id_ = std::stoi(world_id_str);
-          ROS_INFO("[Relay] world_id (string->int): %d", world_id_);
-        } catch (...) {
-          ROS_ERROR("[Relay] Failed to convert world_id '%s' to integer", world_id_str.c_str());
-          world_id_ = 0;
-        }
-      } else {
-        // 尝试直接读取整数
-        pnh_.param<int>("world_id", world_id_, 0);
-        ROS_INFO("[Relay] world_id (int): %d", world_id_);
-      }
-    } else {
-      world_id_ = 0;
-      ROS_INFO("[Relay] world_id not set, using default: %d", world_id_);
-    }
+    loadWorldIds();
 
-    // 读取 tool_ids (支持字符串向量和整数向量)
-    tool_ids_.clear();
-    XmlRpc::XmlRpcValue tool_ids_param;
-    if (pnh_.hasParam("tool_ids") && pnh_.getParam("tool_ids", tool_ids_param)) {
-      if (tool_ids_param.getType() == XmlRpc::XmlRpcValue::TypeArray) {
-        for (int i = 0; i < tool_ids_param.size(); ++i) {
-          if (tool_ids_param[i].getType() == XmlRpc::XmlRpcValue::TypeString) {
-            // 字符串类型，尝试转换为整数
-            std::string id_str = static_cast<std::string>(tool_ids_param[i]);
-            try {
-              int id = std::stoi(id_str);
-              tool_ids_.push_back(id);
-              ROS_INFO("[Relay] Added tool_id (string->int): %d", id);
-            } catch (...) {
-              ROS_WARN("[Relay] Failed to convert tool_id '%s' to integer", id_str.c_str());
-            }
-          } else if (tool_ids_param[i].getType() == XmlRpc::XmlRpcValue::TypeInt) {
-            // 整数类型
-            int id = static_cast<int>(tool_ids_param[i]);
-            tool_ids_.push_back(id);
-            ROS_INFO("[Relay] Added tool_id (int): %d", id);
-          }
-        }
-      } else if (tool_ids_param.getType() == XmlRpc::XmlRpcValue::TypeString) {
-        // 单个字符串，可能是逗号分隔
-        std::string ids_str = static_cast<std::string>(tool_ids_param);
-        std::istringstream iss(ids_str);
-        std::string id_str;
-        while (std::getline(iss, id_str, ',')) {
-          try {
-            // 去除空格
-            id_str.erase(0, id_str.find_first_not_of(" "));
-            id_str.erase(id_str.find_last_not_of(" ") + 1);
-            int id = std::stoi(id_str);
-            tool_ids_.push_back(id);
-            ROS_INFO("[Relay] Added tool_id (comma-separated): %d", id);
-          } catch (...) {
-            ROS_WARN("[Relay] Failed to convert tool_id '%s' to integer", id_str.c_str());
-          }
-        }
-      }
-    }
-
-    // 如果没有设置或转换失败，使用默认值
-    if (tool_ids_.empty()) {
-      tool_ids_ = {10, 11, 12, 13};  // 默认工具ID
-      ROS_INFO("[Relay] Using default tool_ids: [10, 11, 12, 13]");
-    }
+    // 读取 tool_ids（可选，若为空则默认将非 world_id 的全部转发到 tool_topic）
+    loadToolIds();
 
     // 读取话题名称
     pnh_.param<std::string>("input_topic", input_topic_, "/fiducial_transforms");
@@ -97,21 +31,22 @@ public:
       pnh_.param<std::string>("tool_topic", tool_topic_, "/tool_fiducials");
     }
 
-    std::ostringstream tool_ids_ss;
-    tool_ids_ss << "[";
-    for (size_t i = 0; i < tool_ids_.size(); ++i) {
-      tool_ids_ss << tool_ids_[i];
-      if (i + 1 < tool_ids_.size()) {
-        tool_ids_ss << ", ";
+    auto vecToStr = [](const std::vector<int>& v) {
+      std::ostringstream ss;
+      ss << "[";
+      for (size_t i = 0; i < v.size(); ++i) {
+        ss << v[i];
+        if (i + 1 < v.size()) ss << ", ";
       }
-    }
-    tool_ids_ss << "]";
+      ss << "]";
+      return ss.str();
+    };
 
     ROS_INFO("[Relay] input_topic=%s", input_topic_.c_str());
     ROS_INFO("[Relay] output_world_topic=%s", world_topic_.c_str());
     ROS_INFO("[Relay] output_tool_topic=%s", tool_topic_.c_str());
-    ROS_INFO("[Relay] world_id=%d", world_id_);
-    ROS_INFO("[Relay] tool_ids=%s", tool_ids_ss.str().c_str());
+    ROS_INFO("[Relay] world_ids=%s", vecToStr(world_ids_).c_str());
+    ROS_INFO("[Relay] tool_ids=%s (empty=转发非world全部)", vecToStr(tool_ids_).c_str());
 
     sub_ = nh_.subscribe(input_topic_, 1, &FiducialRelay::callback, this);
     world_pub_ = nh_.advertise<fiducial_msgs::FiducialTransformArray>(world_topic_, 1);
@@ -124,11 +59,13 @@ private:
     world_msg.header = msg->header;
     tool_msg.header = msg->header;
 
+    std::vector<int> detected_ids;
     for (const auto& ft : msg->transforms) {
-      if (ft.fiducial_id == world_id_) {
+      detected_ids.push_back(ft.fiducial_id);
+      if (isWorldId(ft.fiducial_id)) {
         world_msg.transforms.push_back(ft);
         ROS_DEBUG("[Relay] Routed world fiducial ID=%d", ft.fiducial_id);
-      } else if (std::find(tool_ids_.begin(), tool_ids_.end(), ft.fiducial_id) != tool_ids_.end()) {
+      } else if (tool_ids_.empty() || std::find(tool_ids_.begin(), tool_ids_.end(), ft.fiducial_id) != tool_ids_.end()) {
         tool_msg.transforms.push_back(ft);
         ROS_DEBUG("[Relay] Routed tool fiducial ID=%d", ft.fiducial_id);
       } else {
@@ -140,7 +77,13 @@ private:
     tool_pub_.publish(tool_msg);
 
     if (world_msg.transforms.empty()) {
-      ROS_WARN_THROTTLE(1.0, "[Relay] World fiducial ID=%d not found in input", world_id_);
+      std::ostringstream oss;
+      for (size_t i = 0; i < detected_ids.size(); ++i) {
+        oss << detected_ids[i];
+        if (i + 1 < detected_ids.size()) oss << ",";
+      }
+      ROS_WARN_THROTTLE(1.0, "[Relay] World fiducial IDs not found in input. Detected IDs: [%s]",
+                        oss.str().c_str());
     }
   }
 
@@ -148,9 +91,90 @@ private:
   ros::Subscriber sub_;
   ros::Publisher world_pub_, tool_pub_;
 
-  int world_id_;
+  std::vector<int> world_ids_;
   std::vector<int> tool_ids_;
   std::string input_topic_, world_topic_, tool_topic_;
+
+  bool isWorldId(int id) const {
+    return std::find(world_ids_.begin(), world_ids_.end(), id) != world_ids_.end();
+  }
+
+  void loadWorldIds() {
+    world_ids_.clear();
+    XmlRpc::XmlRpcValue param;
+    if (pnh_.getParam("world_ids", param) && param.getType() == XmlRpc::XmlRpcValue::TypeArray) {
+      for (int i = 0; i < param.size(); ++i) {
+        if (param[i].getType() == XmlRpc::XmlRpcValue::TypeInt) {
+          world_ids_.push_back(static_cast<int>(param[i]));
+        } else if (param[i].getType() == XmlRpc::XmlRpcValue::TypeString) {
+          try {
+            world_ids_.push_back(std::stoi(static_cast<std::string>(param[i])));
+          } catch (...) {
+            ROS_WARN("[Relay] world_ids 元素无法解析，已跳过");
+          }
+        }
+      }
+    }
+
+    if (world_ids_.empty()) {
+      // 兼容单 world_id 参数
+      int world_id_single = 0;
+      if (pnh_.hasParam("world_id")) {
+        std::string world_id_str;
+        if (pnh_.getParam("world_id", world_id_str)) {
+          try {
+            world_id_single = std::stoi(world_id_str);
+          } catch (...) {
+            pnh_.param<int>("world_id", world_id_single, 0);
+          }
+        } else {
+          pnh_.param<int>("world_id", world_id_single, 0);
+        }
+      }
+      world_ids_.push_back(world_id_single);
+    }
+
+    if (world_ids_.empty()) {
+      world_ids_ = {500};
+    }
+  }
+
+  void loadToolIds() {
+    tool_ids_.clear();
+    XmlRpc::XmlRpcValue tool_ids_param;
+    if (pnh_.hasParam("tool_ids") && pnh_.getParam("tool_ids", tool_ids_param)) {
+      if (tool_ids_param.getType() == XmlRpc::XmlRpcValue::TypeArray) {
+        for (int i = 0; i < tool_ids_param.size(); ++i) {
+          if (tool_ids_param[i].getType() == XmlRpc::XmlRpcValue::TypeString) {
+            std::string id_str = static_cast<std::string>(tool_ids_param[i]);
+            try {
+              int id = std::stoi(id_str);
+              tool_ids_.push_back(id);
+            } catch (...) {
+              ROS_WARN("[Relay] Failed to convert tool_id '%s' to integer", id_str.c_str());
+            }
+          } else if (tool_ids_param[i].getType() == XmlRpc::XmlRpcValue::TypeInt) {
+            int id = static_cast<int>(tool_ids_param[i]);
+            tool_ids_.push_back(id);
+          }
+        }
+      } else if (tool_ids_param.getType() == XmlRpc::XmlRpcValue::TypeString) {
+        std::string ids_str = static_cast<std::string>(tool_ids_param);
+        std::istringstream iss(ids_str);
+        std::string id_str;
+        while (std::getline(iss, id_str, ',')) {
+          try {
+            id_str.erase(0, id_str.find_first_not_of(" "));
+            id_str.erase(id_str.find_last_not_of(" ") + 1);
+            int id = std::stoi(id_str);
+            tool_ids_.push_back(id);
+          } catch (...) {
+            ROS_WARN("[Relay] Failed to convert tool_id '%s' to integer", id_str.c_str());
+          }
+        }
+      }
+    }
+  }
 };
 
 int main(int argc, char** argv) {

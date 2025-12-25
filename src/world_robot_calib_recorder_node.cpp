@@ -138,7 +138,7 @@ public:
     pnh_.param<std::string>("arm_name", arm_name_, std::string("jaka1"));
     pnh_.param<std::string>("calib_pose_csv", calib_pose_csv_,
                             ros::package::getPath("jaka_close_contro") + "/config/jaka1_world_robot_calibration_pose.csv");
-    pnh_.param<std::string>("linear_move_service", linear_move_service_, std::string("/jaka_driver/linear_move"));
+    pnh_.param<std::string>("linear_move_service", linear_move_service_, std::string("jaka_driver/linear_move"));
     pnh_.param<double>("speed_scale", speed_scale_, 0.15);
     pnh_.param<double>("linear_speed_mm_s", linear_speed_mm_s_, 80.0);
     pnh_.param<double>("linear_acc_mm_s2", linear_acc_mm_s2_, 200.0);
@@ -150,8 +150,8 @@ public:
     pnh_.param<double>("wait_before_sample_sec", wait_before_sample_sec_, 5.0);
     pnh_.param<double>("wait_after_sample_sec", wait_after_sample_sec_, 2.0);
 
-    pnh_.param<std::string>("fused_topic", fused_topic_, std::string("/cube_center_fused"));
-    pnh_.param<std::string>("stats_topic", stats_topic_, std::string("/cube_fusion_stats"));
+    pnh_.param<std::string>("fused_topic", fused_topic_, std::string("cube_center_fused"));
+    pnh_.param<std::string>("stats_topic", stats_topic_, std::string("cube_fusion_stats"));
     pnh_.param<std::string>("camera_frame", camera_frame_, std::string("zed2i_left_camera_optical_frame"));
     pnh_.param<std::string>("cube_frame", cube_frame_, std::string("cube_center"));
     pnh_.param<std::string>("world_frame", world_frame_, std::string("world"));
@@ -175,7 +175,7 @@ public:
     {
       const ros::Time now = ros::Time::now();
       const std::string stamp = std::to_string(static_cast<long long>(now.toSec()));
-      output_dataset_csv_ = ros::package::getPath("jaka_close_contro") + "/config/world_robot_calib_dataset_" + stamp + ".csv";
+      output_dataset_csv_ = ros::package::getPath("jaka_close_contro") + "/config/world_robot_calib_dataset_" + stamp + "_" + arm_name_ + ".csv";
     }
 
     linear_move_client_ = nh_.serviceClient<jaka_msgs::Move>(linear_move_service_);
@@ -231,7 +231,7 @@ private:
   double wait_before_sample_sec_ = 5.0;
   double wait_after_sample_sec_ = 2.0;
   double sample_duration_sec_ = 2.0;
-  std::string joint_state_topic_ = "/joint_states";
+  std::string joint_state_topic_ = "joint_states";
 
   std::string fused_topic_;
   std::string stats_topic_;

@@ -1,0 +1,13 @@
+robots:
+  jaka1:
+    ip: "192.168.1.100"
+    calib_pose_csv: "config/jaka1_world_robot_calibration_pose.csv"
+  jaka2:
+    ip: "192.168.1.101"
+    calib_pose_csv: "config/jaka2_world_robot_calibration_pose.csv"
+  jaka3:
+    ip: "192.168.1.102"
+    calib_pose_csv: "config/jaka3_world_robot_calibration_pose.csv"
+  jaka4:
+    ip: "192.168.1.103"
+    calib_pose_csv: "config/jaka4_world_robot_calibration_pose.csv"

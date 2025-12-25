@@ -1,10 +1,12 @@
 <launch>
-  <!-- 0. JAKA 驱动与 URDF TF -->
-  <arg name="ip" default="192.168.1.100" />
+  <!-- 0. 机器人与 URDF 配置 -->
+  <arg name="robot_name" default="jaka1" />
+  <arg name="robot_ip" default="$(eval {'jaka1':'192.168.1.100','jaka2':'192.168.1.101','jaka3':'192.168.1.102','jaka4':'192.168.1.103'}.get('$(arg robot_name)','192.168.1.100'))" />
   <arg name="urdf_file" default="$(find jaka_close_contro)/urdf/jaka_zu3.urdf" />
+  <arg name="calib_pose_csv" default="$(eval {'jaka1':'$(find jaka_close_contro)/config/jaka1_world_robot_calibration_pose.csv','jaka2':'$(find jaka_close_contro)/config/jaka2_world_robot_calibration_pose.csv','jaka3':'$(find jaka_close_contro)/config/jaka3_world_robot_calibration_pose.csv','jaka4':'$(find jaka_close_contro)/config/jaka4_world_robot_calibration_pose.csv'}['$(arg robot_name)'])" />
 
   <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
-    <arg name="ip" value="$(arg ip)" />
+    <arg name="ip" value="$(arg robot_ip)" />
     <arg name="urdf_file" value="$(arg urdf_file)" />
   </include>
 
@@ -49,8 +51,7 @@
         type="fiducial_relay_node"
         name="fiducial_relay"
         output="screen">
-    <param name="world_id" type="int" value="500"/>
-    <rosparam param="tool_ids">["10", "11", "12", "13"]</rosparam>
+    <rosparam param="world_ids">[500, 501, 502, 503]</rosparam>
     <param name="input_topic" value="/fiducial_transforms"/>
     <param name="output_world_topic" value="/world_fiducials"/>
     <param name="output_tool_topic"  value="/tool_fiducials"/>
@@ -60,7 +61,7 @@
         type="world_tag_node"
         name="world_tag_node"
         output="screen">
-    <param name="world_id" type="int" value="500"/>
+    <rosparam param="world_ids">[500, 501, 502, 503]</rosparam>
     <param name="fiducial_topic"    value="/world_fiducials"/>
     <param name="world_frame"       value="world"/>
     <param name="camera_frame"      value="zed2i_left_camera_optical_frame"/>
@@ -84,8 +85,8 @@
         type="world_robot_calib_recorder_node"
         name="world_robot_calib_recorder"
         output="screen">
-    <param name="arm_name"         value="jaka1" />
-    <param name="calib_pose_csv"   value="$(find jaka_close_contro)/config/jaka1_world_robot_calibration_pose.csv" />
+    <param name="arm_name"         value="$(arg robot_name)" />
+    <param name="calib_pose_csv"   value="$(arg calib_pose_csv)" />
     <param name="speed_scale" value="0.15" />
     <param name="linear_speed_mm_s" value="80.0" />
     <param name="linear_acc_mm_s2" value="200.0" />
