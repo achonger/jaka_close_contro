@@ -1,236 +1,110 @@
-# JAKA机械臂视觉伺服闭环控制系统
+# JAKA 视觉伺服与世界-机器人标定
 
-## 系统概述
+本仓库提供 1~4 台 JAKA 机械臂的视觉链路、世界板定义、末端立方体多面融合以及世界→机器人离线标定工具链。所有组件在只连接部分机械臂时均可降级运行（缺失的机器人仅打印警告，不会阻塞节点）。
 
-本项目实现了基于视觉反馈的JAKA机械臂闭环控制系统，能够将正方体中心位姿精确控制到世界坐标系的指定位姿。系统主要包括：
+## 关键规则与配置
 
-1. **视觉检测模块** - 使用ArUco标记检测物体位姿
-2. **手眼标定模块** - 标定相机坐标系到机械臂基坐标系的转换
-3. **世界-机器人标定模块** - 标定世界坐标系到机械臂基坐标系的转换
-4. **闭环控制模块** - 基于视觉反馈的实时控制
-5. **机械臂驱动模块** - JAKA机械臂底层驱动
+- **统一机器人注册表**：`config/robots.yaml` 列出 4 台机械臂的 `name/id/ns/base_frame/tool_frame/ip`。Launch/脚本会据此自动找到 TF 名称与 service 名称。
+- **Cube 面 ID 规则**（保持 jaka1 旧编号）：
+  - jaka1：face1~4 → 10,11,12,13（面内 marker 0..3,10..13,20..23,30..33）
+  - 其余机械臂整体偏移 `robot_stride=100`：jaka2 110..113，jaka3 210..213，jaka4 310..313。
+- **世界板 GridBoard**：2x2、marker id 500/501/502/503，世界坐标系原点为整块棋盘的几何中心。
+- **默认 TF/帧**：
+  - 世界：`world`，相机：`zed2i_left_camera_optical_frame`
+  - 立方体中心 TF：`cube_center_<robot_name>`，数据话题：`/vision/<robot_name>/cube_center`
+  - 融合节点附带发布工具虚拟帧：`vision_tool_<robot_name>`（来自 cube_center + tool_offset）
 
-## 系统架构
+## 运行逻辑（节点/话题/TF）
 
+1. **ArUco 检测 `cube_aruco_detector_node`**
+   - 输入：相机图像 + 相机内参
+   - 自动为每个 `robot_ids` 生成 4 个 GridBoard：面内 marker 遵循 0/10/20/30 偏移 + `robot_stride`，输出 fiducial_id=face_id（10..13/110..113/...）；同时输出单 marker TF（便于调试）。
+   - 世界板：识别 id 500/501/502/503 组成的 2x2 Board，输出 fiducial_id=500，对应原点即世界中心。
+   - 输出话题：`/fiducial_transforms`（包含单 marker 与 face_id/世界板 TF）。
+
+2. **话题分流 `fiducial_relay_node`**
+   - world_ids 默认 `[500,501,502,503]`，全部转发到 `/world_fiducials`；其他 fiducial 默认全放行到 `/tool_fiducials`（如需白名单，可设置 `generate_tool_ids=true` 自动生成 10/11/12/13 + stride）。
+
+3. **世界板 TF `world_tag_node`**
+   - 订阅 `/world_fiducials`，优先使用 fiducial_id=500（GridBoard 中心），缺失时回退 500/501/502/503 任意一枚。
+   - 发布 TF：`world` → `zed2i_left_camera_optical_frame`，支持平滑滤波。
+
+4. **多面融合 `cube_multi_face_fusion_node`**
+   - 读取 `config/cube_faces_4robots.yaml` 的 face→cube 几何，按 `robot_ids` 将 fiducial_id 映射到机器人实例。
+   - 每个机器人独立滤波与优化，输出：
+     - 话题 `/vision/<robot_name>/cube_center` (`geometry_msgs/PoseStamped`)
+     - TF：`<camera_frame>` → `cube_center_<robot_name>`
+     - TF：`<camera_frame>` → `vision_tool_<robot_name>`（cube_center 加 tool_offset）
+   - 即使某机器人面缺失也不会报错，仅跳过输出。
+
+## 启动示例
+
+### 仅视觉链路（多机器人并存，支持 500 世界板）
+```bash
+roslaunch jaka_close_contro full_system.launch robot_ids:="[1,2]"
 ```
-相机 → ArUco检测 → 坐标转换 → 闭环控制器 → JAKA驱动 → 机械臂
-          ↑                                    ↓
-       物体位姿                            实际位姿反馈
+- 仅看到 jaka1：输出 `/vision/jaka1/cube_center` 与 TF `cube_center_jaka1`
+- 同时看到 jaka1+jaka2：两路输出并存，不互相覆盖
+- 未连接的机器人不会阻塞，相关输出缺失时仅有 warn。
+
+### 快速闭环/调试（复用同一参数）
+```bash
+roslaunch jaka_close_contro closed_loop_system.launch robot_ids:="[1]"
 ```
+（如需多台机械臂闭环，可复制/修改 bringup include，让不同 IP 的 driver 启动在各自 namespace）。
 
-## 标定流程
+## 自动录制世界→基座标定数据集
 
-### 1. 世界坐标系定义
+### 录制前准备
+1. 启动视觉链路，确保能看到：
+   - 世界板（id 500/501/502/503）
+   - 目标机械臂的立方体面（对应 face_id 段）
+2. 确认 TF 树存在 `Link_0`→`Link_6`（或 robots.yaml 中配置的 base/tool）。
+3. 准备姿态 CSV（每行 6 个关节值，逗号分隔）。
 
-首先通过`world_tag_node`定义世界坐标系，使用固定的ArUco标记作为世界坐标系原点。
+### 录制命令
+```bash
+# 先启动视觉/TF
+roslaunch jaka_close_contro full_system.launch robot_ids:="[1,2]"
 
-#### 世界坐标系标定步骤：
-
-1. **放置世界坐标系标靶**：在工作区域放置一个固定且可见的ArUco标记作为世界坐标系原点
-2. **配置世界坐标系节点**：
-   ```bash
-   roslaunch jaka_close_contro world_tag_bringup.launch
-   ```
-3. **验证世界坐标系**：确保相机-世界坐标系的TF变换正确建立
-
-### 2. 手眼标定
-
-手眼标定用于建立相机坐标系与机械臂末端执行器之间的关系。
-
-#### 标定步骤：
-
-1. **准备标定工具**：将ArUco标记固定在机械臂末端，或使用立方体标靶
-2. **启动系统**：
-   ```bash
-   roslaunch jaka_close_contro full_system.launch
-   ```
-3. **收集数据点**：
-   - 将机械臂移动到不同的位姿
-   - 确保相机能清晰看到标定工具
-   - 每个位姿下运行服务收集数据：
-   ```bash
-   rosservice call /collect_calibration_data "{}"
-   ```
-   - 重复此过程至少10次，覆盖工作空间的不同区域
-
-4. **执行标定**：
-   ```bash
-   rosservice call /calibrate_hand_eye "{}"
-   ```
-
-### 3. 世界-机器人标定
-
-新增了世界坐标系与机械臂基座标系之间的标定功能，这是实现精确全局定位的关键步骤。
-
-#### 世界-机器人标定步骤：
-
-1. **确保系统正常运行**：
-   - 世界坐标系已通过`world_tag_node`正确定义
-   - 机械臂末端的立方体标靶位姿可通过`cube_multi_face_fusion_node`获取
-
-2. **启动世界-机器人标定节点**：
-   ```bash
-   roslaunch jaka_close_contro world_robot_calibration.launch
-   ```
-
-3. **收集标定数据**：
-   - 移动机械臂到不同的位姿
-   - 运行服务收集数据点：
-   ```bash
-   rosservice call /collect_world_robot_calibration_data "{}"
-   ```
-   - 重复此过程至少5次，确保覆盖工作空间的不同区域
-
-4. **执行标定**：
-   ```bash
-   rosservice call /calibrate_world_robot "{}"
-   ```
-
-5. **验证标定结果**：
-   - 检查标定结果的合理性
-   - 通过移动机械臂并检查世界坐标系下的位姿一致性来验证
-
-## 闭环控制流程
-
-### 1. 设置目标位姿
-
-在`closed_loop_control_node.cpp`中设置目标位姿：
-
-```cpp
-target_pose_.pose.position.x = 0.3;  // 目标位置x (m)
-target_pose_.pose.position.y = 0.0;  // 目标位置y (m)
-target_pose_.pose.position.z = 0.2;  // 目标位置z (m)
-target_pose_.pose.orientation.w = 1.0;  // 目标姿态
-// ... 其他姿态参数
+# 录制 jaka2，速度≤15%，结果保存在 data/world_robot_calib_dataset_jaka2_*.csv
+python3 scripts/record_world_robot_dataset.py \
+  --robot-id 2 \
+  --pose-csv config/poses_jaka2.csv \
+  --out-dir data \
+  --robots-config config/robots.yaml \
+  --world-frame world \
+  --camera-frame zed2i_left_camera_optical_frame
 ```
+- `robot-id`/`robot-name` 任选其一指定目标机械臂
+- `cube_frame_prefix` 默认 `cube_center_`，会自动拼接机器人名
+- 录制过程中若世界板或 cube_center 丢失，当前样本会被跳过并打印 warn（不会写入 CSV）。
 
-### 2. 启动闭环控制
+### 数据集字段（每行）
+- `world_cam_*`：world→camera 变换
+- `world_cube_*`：world→cube_center_<robot> 变换（来自融合输出）
+- `base_tool_*`：base→tool 变换（来自 TF）
+- 额外元信息：robot_id/robot_name/pose_idx/各帧名
+
+## 离线求解 world→Link_0 外参
 
 ```bash
-rosservice call /start_closed_loop_control "{}"
+python3 scripts/offline_calibrate_world_robot.py data/world_robot_calib_dataset_jaka2_XXXX.csv \
+  --robot-name jaka2 \
+  --output-dir data
 ```
+- 默认使用 tool_offset 平移 `[0,0,0.077]`，如需调整可传 `--tool-offset x y z`
+- 输出 `data/world_robot_extrinsic_offline_jaka2.yaml`，不会覆盖其他机器人结果
+- 支持多机器人各自独立运行，dataset/结果互不冲突
 
-### 3. 控制算法
+## 常见 ID/文件速查
+- 机器人注册表：`config/robots.yaml`
+- Cube 面几何：`config/cube_faces_4robots.yaml`
+- 世界板 ID：500/501/502/503（原点在棋盘中心）
+- 融合输出话题：`/vision/<robot>/cube_center`
+- 融合 TF：`cube_center_<robot>`、`vision_tool_<robot>`
 
-系统采用基于位置的视觉伺服控制算法：
-
-1. **视觉反馈**：实时检测物体当前位姿
-2. **误差计算**：计算当前位姿与目标位姿的偏差
-3. **控制律**：使用比例控制器计算控制命令
-4. **执行控制**：将控制命令发送给机械臂
-5. **迭代更新**：重复上述过程直到达到目标精度
-
-## 系统节点说明
-
-### calibration_node
-- **功能**：执行手眼标定
-- **订阅**：
-  - `/aruco/markers` - ArUco标记检测结果
-  - `/joint_states` - 机械臂关节状态
-- **发布**：
-  - `/calibration_result` - 标定结果
-- **服务**：
-  - `/collect_calibration_data` - 收集标定数据
-  - `/calibrate_hand_eye` - 执行手眼标定
-
-### world_robot_calibration_node
-- **功能**：执行世界坐标系-机械臂基座标系标定
-- **订阅**：
-  - `/cube_center_fused` - 立方体中心位姿
-  - `/joint_states` - 机械臂关节状态
-- **发布**：
-  - `/world_robot_calibration_result` - 标定结果
-- **服务**：
-  - `/collect_world_robot_calibration_data` - 收集标定数据
-  - `/calibrate_world_robot` - 执行世界-机器人标定
-- **服务客户端**：
-  - `/jaka_driver/joint_move` - 机械臂运动控制
-
-### closed_loop_control_node
-- **功能**：执行闭环控制
-- **订阅**：
-  - `/aruco/markers` - ArUco标记检测结果
-  - `/joint_states` - 机械臂关节状态
-- **发布**：
-  - `/target_pose` - 目标位姿
-  - `/current_object_pose` - 当前物体位姿
-- **服务**：
-  - `/start_closed_loop_control` - 启动闭环控制
-- **服务客户端**：
-  - `/jaka_driver/joint_move` - 机械臂运动控制
-
-### 其他节点
-- `cube_aruco_detector_node` - ArUco标记检测
-- `world_tag_node` - 世界坐标系定义
-- `cube_multi_face_fusion_node` - 多面位姿融合
-
-## 使用方法
-
-### 1. 自动标定流程
-运行标定脚本：
-```bash
-/workspace/scripts/calibration_procedure.sh
-```
-
-### 2. 世界-机器人标定流程
-使用Python脚本进行标定：
-```bash
-python3 /workspace/scripts/calibrate_world_robot.py
-```
-
-### 3. 手动标定流程
-1. 启动所有节点
-2. 手动移动机械臂到不同位姿
-3. 收集标定数据
-4. 执行手眼标定或世界-机器人标定
-5. 验证标定结果
-
-### 4. 闭环控制
-1. 设置目标位姿
-2. 启动闭环控制服务
-3. 监控控制过程
-4. 验证最终结果
-
-## 参数配置
-
-### 控制参数
-- `position_tolerance_`：位置容差 (默认0.01m)
-- `orientation_tolerance_`：姿态容差 (默认0.05rad)
-- 控制频率：10Hz
-
-### 标定参数
-- 数据点数量：建议≥10个（手眼标定）或≥5个（世界-机器人标定）
-- 标定板尺寸：根据实际ArUco标记大小设置
-
-## 注意事项
-
-1. **安全第一**：在自动控制前确保工作区域无障碍物
-2. **标定精度**：标定质量直接影响控制精度
-3. **视觉检测**：确保相机视野内始终有可见的标记
-4. **机械臂状态**：确保机械臂处于安全工作状态
-5. **坐标系一致性**：确保所有坐标系定义一致
-
-## 故障排除
-
-1. **检测不到标记**：检查相机参数和标记大小设置
-2. **控制精度低**：重新执行手眼标定或世界-机器人标定
-3. **系统不稳定**：调整控制参数和频率
-4. **通信失败**：检查网络连接和IP配置
-
-## 文件结构
-
-```
-/workspace/
-├── src/
-│   ├── calibration_node.cpp              # 标定节点
-│   ├── world_robot_calibration_node.cpp  # 世界-机器人标定节点
-│   └── closed_loop_control_node.cpp      # 闭环控制节点
-├── launch/
-│   ├── closed_loop_system.launch         # 系统启动文件
-│   └── world_robot_calibration.launch    # 世界-机器人标定启动文件
-├── scripts/
-│   ├── calibration_procedure.sh          # 标定流程脚本
-│   └── calibrate_world_robot.py          # 世界-机器人标定脚本
-├── CMakeLists.txt                        # 编译配置
-└── README.md                            # 本说明文档
-```
+## 开发备注
+- `cube_aruco_detector_node` 支持旧 `tool_gridboards` 参数：如显式提供则优先使用，否则按 `robot_ids`/stride 自动生成。
+- `fiducial_relay_node` 默认全放行非 world_id；如需白名单，将 `generate_tool_ids` 设为 true 即可按 robot_ids 自动填充 10/11/12/13 + 偏移。
+- 若仅有 jaka1 连接，其余机器人缺席不会造成节点退出；所有 TF/话题按可见信息独立产出。

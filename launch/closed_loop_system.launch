@@ -1,36 +1,36 @@
 <launch>
-    <!-- 启动JAKA机械臂驱动 -->
+    <arg name="robot_ids" default="[1]" />
+    <arg name="robots_config" default="$(find jaka_close_contro)/config/robots.yaml" />
+
+    <!-- 启动JAKA机械臂驱动（仅首个机器人，其他机器人按需自定义 bringup） -->
     <include file="$(find jaka_sdk_driver)/launch/jaka_sdk_bringup.launch">
         <arg name="robot_ip" value="192.168.1.100"/>
     </include>
 
     <!-- 启动ArUco标记检测 -->
-    <node name="cube_aruco_detector" pkg="jaka_vision_control" type="cube_aruco_detector_node" output="screen">
-        <param name="camera_topic" value="/camera/color/image_raw"/>
-        <param name="marker_size" value="0.05"/> <!-- 5cm marker size -->
-        <param name="dictionary" value="0"/> <!-- 4x4_50 dictionary -->
+    <node name="cube_aruco_detector" pkg="jaka_close_contro" type="cube_aruco_detector_node" output="screen">
+        <param name="image_topic" value="/camera/color/image_raw"/>
+        <param name="camera_info_topic" value="/camera/color/camera_info"/>
+        <param name="fiducial_topic" value="/fiducial_transforms"/>
+        <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
     </node>
 
     <!-- 启动话题分流器 -->
-    <node name="fiducial_relay" pkg="jaka_vision_control" type="fiducial_relay_node" output="screen">
+    <node name="fiducial_relay" pkg="jaka_close_contro" type="fiducial_relay_node" output="screen">
+        <rosparam param="world_ids">[500,501,502,503]</rosparam>
+        <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
     </node>
 
     <!-- 启动世界坐标系定义 -->
-    <node name="world_tag" pkg="jaka_vision_control" type="world_tag_node" output="screen">
+    <node name="world_tag" pkg="jaka_close_contro" type="world_tag_node" output="screen">
+        <param name="world_board_id" value="500"/>
+        <rosparam param="world_ids">[500,501,502,503]</rosparam>
     </node>
 
     <!-- 启动多面融合节点 -->
-    <node name="cube_multi_face_fusion" pkg="jaka_vision_control" type="cube_multi_face_fusion_node" output="screen">
+    <node name="cube_multi_face_fusion" pkg="jaka_close_contro" type="cube_multi_face_fusion_node" output="screen">
+        <param name="faces_yaml" value="$(find jaka_close_contro)/config/cube_faces_4robots.yaml"/>
+        <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
+        <param name="robots_config" value="$(arg robots_config)"/>
     </node>
-
-    <!-- 启动标定节点 -->
-    <node name="calibration_node" pkg="jaka_vision_control" type="calibration_node" output="screen">
-    </node>
-
-    <!-- 启动闭环控制节点 -->
-    <node name="closed_loop_control" pkg="jaka_vision_control" type="closed_loop_control_node" output="screen">
-    </node>
-
-    <!-- 可选：启动RViz可视化 -->
-    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find jaka_vision_control)/config/visualization.rviz" />
 </launch>

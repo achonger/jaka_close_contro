@@ -9,19 +9,24 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <string>
+#include <set>
+#include <xmlrpcpp/XmlRpcValue.h>
 
 class WorldTagNode {
 public:
   WorldTagNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
     : nh_(nh), pnh_(pnh), has_prev_(false) {
-    pnh_.param("world_fiducial_id", world_id_, 0);
+    pnh_.param("world_fiducial_id", world_board_id_, 500);
+    pnh_.param("world_board_id", world_board_id_, world_board_id_);
     pnh_.param<std::string>("fiducial_topic", fiducial_topic_, "/world_fiducials");
     pnh_.param<std::string>("world_frame", world_frame_, "world");
     pnh_.param<std::string>("camera_frame", camera_frame_, "zed2i_left_camera_optical_frame");
     pnh_.param("alpha_pos", alpha_pos_, 0.3);
     pnh_.param("alpha_rot", alpha_rot_, 0.3);
+    loadWorldIds();
 
-    ROS_INFO_STREAM("[WorldTag] world_fiducial_id = " << world_id_);
+    ROS_INFO_STREAM("[WorldTag] world_board_id = " << world_board_id_);
+    ROS_INFO_STREAM("[WorldTag] world_ids size = " << world_ids_.size());
     ROS_INFO_STREAM("[WorldTag] fiducial_topic    = " << fiducial_topic_);
     ROS_INFO_STREAM("[WorldTag] world_frame       = " << world_frame_);
     ROS_INFO_STREAM("[WorldTag] camera_frame      = " << camera_frame_);
@@ -35,7 +40,12 @@ private:
     geometry_msgs::Transform transform;
 
     for (const auto& ft : msg->transforms) {
-      if (ft.fiducial_id == world_id_) {
+      if (ft.fiducial_id == world_board_id_) {
+        transform = ft.transform;
+        found = true;
+        break;
+      }
+      if (world_ids_.count(ft.fiducial_id) > 0) {
         transform = ft.transform;
         found = true;
         break;
@@ -43,7 +53,7 @@ private:
     }
 
     if (!found) {
-      ROS_WARN_THROTTLE(2.0, "[WorldTag] World fiducial ID=%d not found.", world_id_);
+      ROS_WARN_THROTTLE(2.0, "[WorldTag] World fiducial ID=%d not found.", world_board_id_);
       return;
     }
 
@@ -105,11 +115,35 @@ private:
   ros::Subscriber sub_;
   tf2_ros::TransformBroadcaster tf_broadcaster_;
 
-  int world_id_;
+  int world_board_id_;
   std::string fiducial_topic_, world_frame_, camera_frame_;
   double alpha_pos_, alpha_rot_;
   bool has_prev_;
   tf2::Transform prev_T_world_cam_;
+  std::set<int> world_ids_;
+
+  void loadWorldIds() {
+    XmlRpc::XmlRpcValue ids_param;
+    if (pnh_.hasParam("world_ids") && pnh_.getParam("world_ids", ids_param)) {
+      if (ids_param.getType() == XmlRpc::XmlRpcValue::TypeArray) {
+        for (int i = 0; i < ids_param.size(); ++i) {
+          if (ids_param[i].getType() == XmlRpc::XmlRpcValue::TypeInt) {
+            world_ids_.insert(static_cast<int>(ids_param[i]));
+          } else if (ids_param[i].getType() == XmlRpc::XmlRpcValue::TypeString) {
+            try {
+              world_ids_.insert(std::stoi(static_cast<std::string>(ids_param[i])));
+            } catch (...) {
+              ROS_WARN("[WorldTag] Failed to parse world_ids entry");
+            }
+          }
+        }
+      }
+    }
+    if (world_ids_.empty()) {
+      // 默认使用 2x2 world board 四个角的 ID
+      world_ids_ = {500, 501, 502, 503};
+    }
+  }
 };
 
 int main(int argc, char** argv) {

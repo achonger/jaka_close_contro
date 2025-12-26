@@ -1,10 +1,16 @@
 <launch>
+  <arg name="robot_ids" default="[1]" />
+  <arg name="robot_stride" default="100" />
+  <arg name="id_step" default="10" />
+  <arg name="face_id_base" default="10" />
+  <arg name="robots_config" default="$(find jaka_close_contro)/config/robots.yaml" />
+
   <!-- 1. 启动 ZED2i 相机 -->
   <include file="$(find zed_wrapper)/launch/zed2i.launch">
     <arg name="svo_file" value="" />
   </include>
 
-  <!-- 2. 多尺寸 ArUco 检测器 (关键修正：字典键必须是字符串) -->
+  <!-- 2. 多尺寸 ArUco 检测器，自动根据 robot_ids 生成 4 面 GridBoard -->
   <node pkg="jaka_close_contro"
         type="cube_aruco_detector_node"
         name="cube_aruco_detector"
@@ -13,36 +19,49 @@
     <param name="camera_info_topic" value="/zed2i/zed_node/left/camera_info"/>
     <param name="fiducial_topic"    value="/fiducial_transforms"/>
     <param name="default_marker_size" value="0.04"/>
-    
-    <!-- 修正：所有字典键必须用双引号包裹 -->
+    <param name="marker_length" value="0.04"/>
+    <param name="marker_separation" value="0.01"/>
+    <param name="world_marker_length" value="0.08"/>
+    <param name="world_marker_separation" value="0.02"/>
+    <param name="world_board_id" value="500"/>
+    <param name="robot_stride" value="$(arg robot_stride)"/>
+    <param name="id_step" value="$(arg id_step)"/>
+    <param name="face_id_base" value="$(arg face_id_base)"/>
+    <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
     <rosparam param="marker_sizes">
-      "0": 0.08  <!-- World Tag (80mm) -->
-      "10": 0.04  <!-- Tool Face 1 (40mm) -->
-      "11": 0.04  <!-- Tool Face 2 -->
-      "12": 0.04  <!-- Tool Face 3 -->
-      "13": 0.04  <!-- Tool Face 4 -->
+      "0": 0.08
+      "10": 0.04
+      "11": 0.04
+      "12": 0.04
+      "13": 0.04
+      "500": 0.08
+      "501": 0.08
+      "502": 0.08
+      "503": 0.08
     </rosparam>
   </node>
 
-  <!-- 3. 话题分流器 (关键修正：列表元素必须是字符串) -->
+  <!-- 3. 话题分流器：world_ids 留给世界板，其他默认全放行为 tool -->
   <node pkg="jaka_close_contro"
         type="fiducial_relay_node"
         name="fiducial_relay"
         output="screen">
-    <param name="world_id"   value="0"/>
-    <!-- 修正：列表中的每个元素必须用双引号包裹 -->
-    <rosparam param="tool_ids">["10", "11", "12", "13"]</rosparam>
+    <rosparam param="world_ids">[500, 501, 502, 503]</rosparam>
+    <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
+    <param name="face_id_base" value="$(arg face_id_base)"/>
+    <param name="robot_stride" value="$(arg robot_stride)"/>
     <param name="input_topic" value="/fiducial_transforms"/>
     <param name="world_topic" value="/world_fiducials"/>
     <param name="tool_topic"  value="/tool_fiducials"/>
   </node>
 
-  <!-- 4. 世界坐标系定义 -->
+  <!-- 4. 世界坐标系定义（原点=2x2 世界板几何中心） -->
   <node pkg="jaka_close_contro"
         type="world_tag_node"
         name="world_tag_node"
         output="screen">
-    <param name="world_fiducial_id" value="0"/>
+    <param name="world_board_id" value="500"/>
+    <rosparam param="world_ids">[500, 501, 502, 503]</rosparam>
     <param name="fiducial_topic"    value="/world_fiducials"/>
     <param name="world_frame"       value="world"/>
     <param name="camera_frame"      value="zed2i_left_camera_optical_frame"/>
@@ -50,28 +69,22 @@
     <param name="alpha_rot"         value="0.3"/>
   </node>
 
-  <!-- 5. 末端正方体多面融合 -->
+  <!-- 5. 末端正方体多面融合，按 robot_id 输出独立话题/TF -->
   <node pkg="jaka_close_contro"
         type="cube_multi_face_fusion_node"
         name="cube_multi_face_fusion"
         output="screen">
-    <param name="faces_yaml"             value="$(find jaka_close_contro)/config/cube_faces_current.yaml"/>
+    <param name="faces_yaml"             value="$(find jaka_close_contro)/config/cube_faces_4robots.yaml"/>
     <param name="fiducial_topic"         value="/tool_fiducials"/>
-    <param name="cube_frame"             value="cube_center"/>
     <param name="camera_frame_default"   value="zed2i_left_camera_optical_frame"/>
     <param name="alpha_pos"              value="0.3"/>
     <param name="alpha_rot"              value="0.3"/>
     <param name="max_step_pos"           value="0.03"/>
     <param name="max_step_deg"           value="15.0"/>
     <param name="timeout_sec"            value="0.5"/>
+    <param name="robot_stride"           value="$(arg robot_stride)"/>
+    <param name="face_id_base"           value="$(arg face_id_base)"/>
+    <param name="robots_config"          value="$(arg robots_config)"/>
+    <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
   </node>
-
-  <!-- 6. 可视化 (可选) -->
-  <!--
-  <node pkg="rviz" type="rviz" name="rviz" 
-        args="-d $(find jaka_close_contro)/config/full_system.rviz" 
-        output="screen">
-    <env name="ROSCONSOLE_FORMAT" value="[${severity}] [${time}]: ${message}"/>
-  </node>
-  -->
 </launch>
