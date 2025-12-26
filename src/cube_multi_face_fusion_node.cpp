@@ -2,9 +2,11 @@
 #include <ros/ros.h>
 #include <fiducial_msgs/FiducialTransformArray.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/TransformStamped.h>
 #include <tf2/LinearMath/Transform.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <yaml-cpp/yaml.h>
+#include <tf2_ros/transform_broadcaster.h>
 #include <ros/package.h>
 #include <jaka_close_contro/cube_geometry_utils.h>
 
@@ -40,14 +42,21 @@ public:
         cube_frame_("cube_center"),
         has_iekf_state_(false)
   {
-    const std::string default_faces_yaml = ros::package::getPath("jaka_close_contro") + "/config/cube_faces_current.yaml";
+    const std::string default_faces_yaml = ros::package::getPath("jaka_close_contro") + "/config/cube_faces_4robots.yaml";
     pnh_.param<std::string>("faces_yaml", faces_yaml_path_, default_faces_yaml);
     pnh_.param<std::string>("fiducial_topic", fiducial_topic_, "tool_fiducials");
     pnh_.param<std::string>("camera_frame_default", camera_frame_default_, "zed2i_left_camera_optical_frame");
     pnh_.param<std::string>("cube_frame", cube_frame_, "cube_center");
+    pnh_.param<std::string>("robot_name", robot_name_, std::string(""));
+    pnh_.param<std::string>("output_topic", output_topic_, std::string("cube_center_fused"));
+    pnh_.param<std::string>("stats_topic", stats_topic_, std::string("cube_fusion_stats"));
     pnh_.param("robot_id", robot_id_, 1);
     pnh_.param("robot_stride", robot_stride_, 100);
     pnh_.param("face_id_base", face_id_base_, 10);
+    pnh_.param("num_faces", num_faces_, 4);
+    pnh_.param("apply_robot_offset", apply_robot_offset_, false);
+    pnh_.param("filter_robot_faces", filter_robot_faces_, true);
+    pnh_.param("broadcast_tf", broadcast_tf_, true);
 
     // 鲁棒融合参数
     pnh_.param("sigma_ang_deg", sigma_ang_deg_, 6.0);
@@ -65,9 +74,18 @@ public:
     pnh_.param("meas_noise_ang_deg", meas_noise_ang_deg_, 1.5);
     pnh_.param("timeout_sec", timeout_sec_, 0.5);
 
+    if (robot_name_.empty())
+    {
+      std::ostringstream oss;
+      oss << "jaka" << robot_id_;
+      robot_name_ = oss.str();
+    }
+
     ROS_INFO_STREAM("[Fusion] faces_yaml: " << faces_yaml_path_);
     ROS_INFO_STREAM("[Fusion] fiducial_topic: " << fiducial_topic_);
     ROS_INFO_STREAM("[Fusion] cube_frame: " << cube_frame_);
+    ROS_INFO_STREAM("[Fusion] output_topic: " << output_topic_ << ", stats_topic: " << stats_topic_);
+    ROS_INFO_STREAM("[Fusion] robot_name: " << robot_name_);
     ROS_INFO("[Fusion] robot_id=%d, robot_stride=%d, face_id_base=%d", robot_id_, robot_stride_, face_id_base_);
 
     if (faces_yaml_path_.empty() || !cube_geometry::loadFacesYaml(faces_yaml_path_, face2cube_))
@@ -76,12 +94,25 @@ public:
       ros::shutdown();
       return;
     }
-    applyRobotOffset();
+    bool filtered_ok = true;
+    if (apply_robot_offset_)
+    {
+      applyRobotOffset();
+    }
+    else if (filter_robot_faces_)
+    {
+      filtered_ok = filterFacesForRobot();
+      if (!filtered_ok && robot_id_ > 1)
+      {
+        ROS_WARN("[Fusion] faces_yaml 未包含 robot_id=%d 的 face_id，回退为偏移模式", robot_id_);
+        applyRobotOffset();
+      }
+    }
 
     sub_ = nh_.subscribe<fiducial_msgs::FiducialTransformArray>(
         fiducial_topic_, 1, &CubeMultiFaceFusion::callback, this);
-    pub_ = nh_.advertise<geometry_msgs::PoseStamped>("cube_center_fused", 1);
-    stats_pub_ = nh_.advertise<jaka_close_contro::CubeFusionStats>("cube_fusion_stats", 1);
+    pub_ = nh_.advertise<geometry_msgs::PoseStamped>(output_topic_, 1);
+    stats_pub_ = nh_.advertise<jaka_close_contro::CubeFusionStats>(stats_topic_, 1);
   }
 
 private:
@@ -607,6 +638,19 @@ private:
     pose_msg.orientation = tf2::toMsg(q_msg);
     pmsg.pose = pose_msg;
     pub_.publish(pmsg);
+
+    if (broadcast_tf_ && !cube_frame_.empty())
+    {
+      geometry_msgs::TransformStamped tf_msg;
+      tf_msg.header.stamp = stamp;
+      tf_msg.header.frame_id = cam_frame;
+      tf_msg.child_frame_id = cube_frame_;
+      tf_msg.transform.translation.x = t.x();
+      tf_msg.transform.translation.y = t.y();
+      tf_msg.transform.translation.z = t.z();
+      tf_msg.transform.rotation = tf2::toMsg(q_msg);
+      tf_broadcaster_.sendTransform(tf_msg);
+    }
   }
 
   // --------------- 成员 ---------------
@@ -619,10 +663,18 @@ private:
   int robot_id_{1};
   int robot_stride_{100};
   int face_id_base_{10};
+  int num_faces_{4};
+  bool apply_robot_offset_{false};
+  bool filter_robot_faces_{true};
+  bool broadcast_tf_{true};
+  std::string robot_name_;
+  std::string output_topic_;
+  std::string stats_topic_;
   std::string faces_yaml_path_;
   std::string fiducial_topic_;
   std::string camera_frame_default_;
   std::string cube_frame_;
+  tf2_ros::TransformBroadcaster tf_broadcaster_;
 
   double sigma_ang_deg_;
   double sigma_pos_m_;
@@ -657,6 +709,34 @@ private:
                kv.first, new_id, robot_off, t.x(), t.y(), t.z());
     }
     face2cube_.swap(shifted);
+  }
+
+  bool filterFacesForRobot()
+  {
+    const int robot_off = (robot_id_ - 1) * robot_stride_;
+    const int min_id = face_id_base_ + robot_off;
+    const int max_id = min_id + num_faces_;
+
+    std::map<int, tf2::Transform> filtered;
+    for (const auto &kv : face2cube_)
+    {
+      if (kv.first >= min_id && kv.first < max_id)
+      {
+        filtered[kv.first] = kv.second;
+      }
+    }
+
+    if (filtered.empty())
+    {
+      ROS_WARN("[Fusion] No faces matched robot_id=%d in %s, keeping original %zu faces",
+               robot_id_, faces_yaml_path_.c_str(), face2cube_.size());
+      return false;
+    }
+
+    ROS_INFO("[Fusion] Filtered faces to robot_id=%d (ids [%d, %d)), kept %zu faces",
+             robot_id_, min_id, max_id, filtered.size());
+    face2cube_.swap(filtered);
+    return true;
   }
 };
 

@@ -15,6 +15,10 @@
 class FiducialRelay {
 public:
   FiducialRelay(ros::NodeHandle& nh, ros::NodeHandle& pnh) : nh_(nh), pnh_(pnh) {
+    pnh_.param("robot_stride", robot_stride_, 100);
+    pnh_.param("face_id_base", face_id_base_, 10);
+    pnh_.param("num_faces", num_faces_, 4);
+    loadRobotIds();
     loadWorldIds();
 
     // 读取 tool_ids（可选，若为空则默认将非 world_id 的全部转发到 tool_topic）
@@ -93,6 +97,10 @@ private:
 
   std::vector<int> world_ids_;
   std::vector<int> tool_ids_;
+  std::vector<int> robot_ids_param_;
+  int robot_stride_{100};
+  int face_id_base_{10};
+  int num_faces_{4};
   std::string input_topic_, world_topic_, tool_topic_;
 
   bool isWorldId(int id) const {
@@ -118,24 +126,24 @@ private:
 
     if (world_ids_.empty()) {
       // 兼容单 world_id 参数
-      int world_id_single = 0;
+      int world_id_single = 500;
       if (pnh_.hasParam("world_id")) {
         std::string world_id_str;
         if (pnh_.getParam("world_id", world_id_str)) {
           try {
             world_id_single = std::stoi(world_id_str);
           } catch (...) {
-            pnh_.param<int>("world_id", world_id_single, 0);
+            pnh_.param<int>("world_id", world_id_single, 500);
           }
         } else {
-          pnh_.param<int>("world_id", world_id_single, 0);
+          pnh_.param<int>("world_id", world_id_single, 500);
         }
       }
       world_ids_.push_back(world_id_single);
     }
 
     if (world_ids_.empty()) {
-      world_ids_ = {500};
+      world_ids_ = {500, 501, 502, 503};
     }
   }
 
@@ -173,6 +181,50 @@ private:
           }
         }
       }
+    }
+
+    if (tool_ids_.empty() && !robot_ids_param_.empty()) {
+      for (const int rid : robot_ids_param_) {
+        const int base = face_id_base_ + (rid - 1) * robot_stride_;
+        for (int k = 0; k < num_faces_; ++k) {
+          tool_ids_.push_back(base + k);
+        }
+      }
+    }
+  }
+
+  void loadRobotIds() {
+    robot_ids_param_.clear();
+    XmlRpc::XmlRpcValue param;
+    if (pnh_.hasParam("robot_ids") && pnh_.getParam("robot_ids", param)) {
+      if (param.getType() == XmlRpc::XmlRpcValue::TypeArray) {
+        for (int i = 0; i < param.size(); ++i) {
+          if (param[i].getType() == XmlRpc::XmlRpcValue::TypeInt) {
+            robot_ids_param_.push_back(static_cast<int>(param[i]));
+          } else if (param[i].getType() == XmlRpc::XmlRpcValue::TypeString) {
+            try {
+              robot_ids_param_.push_back(std::stoi(static_cast<std::string>(param[i])));
+            } catch (...) {
+              ROS_WARN("[Relay] robot_ids 元素无法解析，已跳过");
+            }
+          }
+        }
+      } else if (param.getType() == XmlRpc::XmlRpcValue::TypeString) {
+        std::string ids_str = static_cast<std::string>(param);
+        std::istringstream iss(ids_str);
+        std::string token;
+        while (iss >> token) {
+          try {
+            robot_ids_param_.push_back(std::stoi(token));
+          } catch (...) {
+            ROS_WARN("[Relay] robot_ids 字符串解析失败，已跳过: %s", token.c_str());
+          }
+        }
+      }
+    }
+
+    if (robot_ids_param_.empty()) {
+      robot_ids_param_.push_back(1);
     }
   }
 };

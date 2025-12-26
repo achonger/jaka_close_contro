@@ -1,10 +1,30 @@
 <launch>
-  <!-- 0. 机器人与 URDF 配置 -->
+  <!-- 机器人选择 & 配置 -->
+  <arg name="robots_config" default="$(find jaka_close_contro)/config/robots.yaml" />
   <arg name="robot_name" default="jaka1" />
-  <arg name="robot_ip" default="$(eval {'jaka1':'192.168.1.100','jaka2':'192.168.1.101','jaka3':'192.168.1.102','jaka4':'192.168.1.103'}.get('$(arg robot_name)','192.168.1.100'))" />
+  <arg name="robot_id" default="$(eval next((r['id'] for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 1))" />
+  <arg name="robot_ip" default="$(eval next((r['ip'] for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), '192.168.1.100'))" />
+  <arg name="base_frame" default="$(eval next((r.get('base_frame','Link_0') for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 'Link_0'))" />
+  <arg name="tool_frame" default="$(eval next((r.get('tool_frame','Link_6') for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 'Link_6'))" />
+  <arg name="calib_pose_csv_rel" default="$(eval next((r.get('calib_pose_csv','config/jaka1_world_robot_calibration_pose.csv') for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 'config/jaka1_world_robot_calibration_pose.csv'))" />
+  <arg name="dataset_out_dir_rel" default="$(eval next((r.get('dataset_out_dir','config') for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 'config'))" />
+  <arg name="default_offline_yaml_rel" default="$(eval next((r.get('default_offline_yaml','config/world_robot_extrinsic_offline_'+arg('robot_name')+'.yaml') for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 'config/world_robot_extrinsic_offline_'+arg('robot_name')+'.yaml'))" />
+  <arg name="robot_ids" default="$(eval [r['id'] for r in load_yaml(arg('robots_config'))['robots']])" />
+  <arg name="faces_yaml" default="$(find jaka_close_contro)/config/cube_faces_4robots.yaml" />
   <arg name="urdf_file" default="$(find jaka_close_contro)/urdf/jaka_zu3.urdf" />
-  <arg name="calib_pose_csv" default="$(eval {'jaka1':'$(find jaka_close_contro)/config/jaka1_world_robot_calibration_pose.csv','jaka2':'$(find jaka_close_contro)/config/jaka2_world_robot_calibration_pose.csv','jaka3':'$(find jaka_close_contro)/config/jaka3_world_robot_calibration_pose.csv','jaka4':'$(find jaka_close_contro)/config/jaka4_world_robot_calibration_pose.csv'}['$(arg robot_name)'])" />
+  <arg name="svo_file" default="" />
+  <arg name="dataset_prefix" default="world_robot_calib_dataset" />
 
+  <arg name="calib_pose_csv" default="$(find jaka_close_contro)/$(arg calib_pose_csv_rel)" />
+  <arg name="dataset_out_dir" default="$(find jaka_close_contro)/$(arg dataset_out_dir_rel)" />
+  <arg name="default_offline_yaml" default="$(find jaka_close_contro)/$(arg default_offline_yaml_rel)" />
+
+  <arg name="enable_jaka1" default="$(eval '1' in str(arg('robot_ids')).replace('[',' ').replace(']',' ').replace(',',' ').split())" />
+  <arg name="enable_jaka2" default="$(eval '2' in str(arg('robot_ids')).replace('[',' ').replace(']',' ').replace(',',' ').split())" />
+  <arg name="enable_jaka3" default="$(eval '3' in str(arg('robot_ids')).replace('[',' ').replace(']',' ').replace(',',' ').split())" />
+  <arg name="enable_jaka4" default="$(eval '4' in str(arg('robot_ids')).replace('[',' ').replace(']',' ').replace(',',' ').split())" />
+
+  <!-- 0. 机器人驱动 -->
   <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
     <arg name="ip" value="$(arg robot_ip)" />
     <arg name="urdf_file" value="$(arg urdf_file)" />
@@ -12,10 +32,10 @@
 
   <!-- 1. ZED2i 相机 -->
   <include file="$(find zed_wrapper)/launch/zed2i.launch">
-    <arg name="svo_file" value="" />
+    <arg name="svo_file" value="$(arg svo_file)" />
   </include>
 
-  <!-- 2. 棱方体检测与融合管线 -->
+  <!-- 2. ArUco 棱方体 + 世界板检测 -->
   <node pkg="jaka_close_contro"
         type="cube_aruco_detector_node"
         name="cube_aruco_detector"
@@ -35,16 +55,14 @@
     <param name="world_board_marker_separation_m" value="0.005"/>
     <param name="world_board_min_markers" value="2"/>
     <param name="enable_single_world_markers" value="false"/>
+    <param name="robot_stride" value="100" />
+    <param name="id_step" value="10" />
+    <param name="face_id_base" value="10" />
+    <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
     <rosparam param="marker_sizes">
       "0": 0.08  <!-- World Tag (80mm) -->
     </rosparam>
     <rosparam param="world_board_marker_ids">[500, 501, 502, 503]</rosparam>
-    <rosparam param="tool_gridboards">
-      "10": [0, 1, 2, 3]
-      "11": [10, 11, 12, 13]
-      "12": [20, 21, 22, 23]
-      "13": [30, 31, 32, 33]
-    </rosparam>
   </node>
 
   <node pkg="jaka_close_contro"
@@ -52,6 +70,7 @@
         name="fiducial_relay"
         output="screen">
     <rosparam param="world_ids">[500, 501, 502, 503]</rosparam>
+    <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
     <param name="input_topic" value="/fiducial_transforms"/>
     <param name="output_world_topic" value="/world_fiducials"/>
     <param name="output_tool_topic"  value="/tool_fiducials"/>
@@ -69,24 +88,105 @@
     <param name="alpha_rot"         value="0.3"/>
   </node>
 
-  <node pkg="jaka_close_contro"
-        type="cube_multi_face_fusion_node"
-        name="cube_multi_face_fusion"
-        output="screen">
-    <param name="faces_yaml"             value="$(find jaka_close_contro)/config/cube_faces_current.yaml"/>
-    <param name="fiducial_topic"         value="/tool_fiducials"/>
-    <param name="cube_frame"             value="cube_center"/>
-    <param name="camera_frame_default"   value="zed2i_left_camera_optical_frame"/>
-    <param name="timeout_sec"            value="0.5"/>
-  </node>
+  <!-- 3. 多机器人融合（每台机器人一份输出） -->
+  <group if="$(arg enable_jaka1)">
+    <node pkg="jaka_close_contro"
+          type="cube_multi_face_fusion_node"
+          name="cube_multi_face_fusion_jaka1"
+          output="screen">
+      <param name="faces_yaml"           value="$(arg faces_yaml)"/>
+      <param name="fiducial_topic"       value="/tool_fiducials"/>
+      <param name="cube_frame"           value="cube_center_jaka1"/>
+      <param name="camera_frame_default" value="zed2i_left_camera_optical_frame"/>
+      <param name="timeout_sec"          value="0.5"/>
+      <param name="robot_id" value="1" />
+      <param name="robot_name" value="jaka1" />
+      <param name="face_id_base" value="10" />
+      <param name="robot_stride" value="100" />
+      <param name="output_topic" value="/vision/jaka1/cube_center" />
+      <param name="stats_topic" value="/vision/jaka1/cube_fusion_stats" />
+      <param name="filter_robot_faces" value="true" />
+      <param name="apply_robot_offset" value="false" />
+      <param name="broadcast_tf" value="true" />
+    </node>
+  </group>
 
-  <!-- 3. 记录模式：执行标定位姿并写入数据集 -->
+  <group if="$(arg enable_jaka2)">
+    <node pkg="jaka_close_contro"
+          type="cube_multi_face_fusion_node"
+          name="cube_multi_face_fusion_jaka2"
+          output="screen">
+      <param name="faces_yaml"           value="$(arg faces_yaml)"/>
+      <param name="fiducial_topic"       value="/tool_fiducials"/>
+      <param name="cube_frame"           value="cube_center_jaka2"/>
+      <param name="camera_frame_default" value="zed2i_left_camera_optical_frame"/>
+      <param name="timeout_sec"          value="0.5"/>
+      <param name="robot_id" value="2" />
+      <param name="robot_name" value="jaka2" />
+      <param name="face_id_base" value="10" />
+      <param name="robot_stride" value="100" />
+      <param name="output_topic" value="/vision/jaka2/cube_center" />
+      <param name="stats_topic" value="/vision/jaka2/cube_fusion_stats" />
+      <param name="filter_robot_faces" value="true" />
+      <param name="apply_robot_offset" value="false" />
+      <param name="broadcast_tf" value="true" />
+    </node>
+  </group>
+
+  <group if="$(arg enable_jaka3)">
+    <node pkg="jaka_close_contro"
+          type="cube_multi_face_fusion_node"
+          name="cube_multi_face_fusion_jaka3"
+          output="screen">
+      <param name="faces_yaml"           value="$(arg faces_yaml)"/>
+      <param name="fiducial_topic"       value="/tool_fiducials"/>
+      <param name="cube_frame"           value="cube_center_jaka3"/>
+      <param name="camera_frame_default" value="zed2i_left_camera_optical_frame"/>
+      <param name="timeout_sec"          value="0.5"/>
+      <param name="robot_id" value="3" />
+      <param name="robot_name" value="jaka3" />
+      <param name="face_id_base" value="10" />
+      <param name="robot_stride" value="100" />
+      <param name="output_topic" value="/vision/jaka3/cube_center" />
+      <param name="stats_topic" value="/vision/jaka3/cube_fusion_stats" />
+      <param name="filter_robot_faces" value="true" />
+      <param name="apply_robot_offset" value="false" />
+      <param name="broadcast_tf" value="true" />
+    </node>
+  </group>
+
+  <group if="$(arg enable_jaka4)">
+    <node pkg="jaka_close_contro"
+          type="cube_multi_face_fusion_node"
+          name="cube_multi_face_fusion_jaka4"
+          output="screen">
+      <param name="faces_yaml"           value="$(arg faces_yaml)"/>
+      <param name="fiducial_topic"       value="/tool_fiducials"/>
+      <param name="cube_frame"           value="cube_center_jaka4"/>
+      <param name="camera_frame_default" value="zed2i_left_camera_optical_frame"/>
+      <param name="timeout_sec"          value="0.5"/>
+      <param name="robot_id" value="4" />
+      <param name="robot_name" value="jaka4" />
+      <param name="face_id_base" value="10" />
+      <param name="robot_stride" value="100" />
+      <param name="output_topic" value="/vision/jaka4/cube_center" />
+      <param name="stats_topic" value="/vision/jaka4/cube_fusion_stats" />
+      <param name="filter_robot_faces" value="true" />
+      <param name="apply_robot_offset" value="false" />
+      <param name="broadcast_tf" value="true" />
+    </node>
+  </group>
+
+  <!-- 4. 记录模式：执行标定位姿并写入数据集 -->
   <node pkg="jaka_close_contro"
         type="world_robot_calib_recorder_node"
         name="world_robot_calib_recorder"
         output="screen">
+    <param name="robot_id"         value="$(arg robot_id)" />
     <param name="arm_name"         value="$(arg robot_name)" />
+    <param name="robot_name"       value="$(arg robot_name)" />
     <param name="calib_pose_csv"   value="$(arg calib_pose_csv)" />
+    <param name="pose_csv"         value="$(arg calib_pose_csv)" />
     <param name="speed_scale" value="0.15" />
     <param name="linear_speed_mm_s" value="80.0" />
     <param name="linear_acc_mm_s2" value="200.0" />
@@ -97,5 +197,14 @@
     <param name="world_frame" value="world" />
     <param name="camera_frame" value="zed2i_left_camera_optical_frame" />
     <param name="world_tf_lookup_timeout_sec" value="0.1" />
+    <param name="cube_frame" value="cube_center_$(arg robot_name)" />
+    <param name="base_frame" value="$(arg base_frame)" />
+    <param name="tool_frame" value="$(arg tool_frame)" />
+    <param name="fused_topic" value="/vision/$(arg robot_name)/cube_center" />
+    <param name="stats_topic" value="/vision/$(arg robot_name)/cube_fusion_stats" />
+    <param name="output_dir" value="$(arg dataset_out_dir)" />
+    <param name="out_dir" value="$(arg dataset_out_dir)" />
+    <param name="dataset_prefix" value="$(arg dataset_prefix)" />
+    <param name="output_prefix" value="$(arg dataset_prefix)" />
   </node>
 </launch>

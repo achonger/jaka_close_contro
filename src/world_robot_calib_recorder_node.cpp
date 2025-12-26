@@ -136,13 +136,31 @@ public:
   WorldRobotCalibRecorderNode(ros::NodeHandle &nh, ros::NodeHandle &pnh)
       : nh_(nh), pnh_(pnh), tf_listener_(tf_buffer_)
   {
+    pnh_.param<int>("robot_id", robot_id_, 1);
     pnh_.param<std::string>("arm_name", arm_name_, std::string("jaka1"));
+    std::string robot_name_override;
+    if (pnh_.getParam("robot_name", robot_name_override) && !robot_name_override.empty())
+    {
+      arm_name_ = robot_name_override;
+    }
     pnh_.param<std::string>("calib_pose_csv", calib_pose_csv_,
                             ros::package::getPath("jaka_close_contro") + "/config/jaka1_world_robot_calibration_pose.csv");
+    std::string pose_csv_override;
+    if (pnh_.getParam("pose_csv", pose_csv_override) && !pose_csv_override.empty())
+    {
+      calib_pose_csv_ = pose_csv_override;
+    }
     pnh_.param<std::string>("linear_move_service", linear_move_service_, std::string("jaka_driver/linear_move"));
     pnh_.param<bool>("use_driver", use_driver_, true);
     pnh_.param<bool>("do_motion", do_motion_, true);
-    pnh_.param<double>("speed_scale", speed_scale_, 0.15);
+    double speed_scale_param = speed_scale_;
+    pnh_.param<double>("speed_scale", speed_scale_param, 0.15);
+    if (speed_scale_param > 0.15)
+    {
+      ROS_WARN("[CalibRecorder] speed_scale=%.3f 超过 0.15，已限制为 0.15", speed_scale_param);
+      speed_scale_param = 0.15;
+    }
+    speed_scale_ = speed_scale_param;
     pnh_.param<double>("linear_speed_mm_s", linear_speed_mm_s_, 80.0);
     pnh_.param<double>("linear_acc_mm_s2", linear_acc_mm_s2_, 200.0);
     pnh_.param<double>("motion_done_timeout_sec", motion_done_timeout_sec_, 120.0);
@@ -175,13 +193,32 @@ public:
 
     pnh_.param<std::string>("output_dataset_csv", output_dataset_csv_, std::string(""));
     pnh_.param<std::string>("output_dir", output_dir_, ros::package::getPath("jaka_close_contro") + "/config");
-    pnh_.param<std::string>("output_prefix", output_prefix_, std::string("world_robot_calib_dataset"));
+    std::string out_dir_override;
+    if (pnh_.getParam("out_dir", out_dir_override) && !out_dir_override.empty())
+    {
+      output_dir_ = out_dir_override;
+    }
+    pnh_.param<std::string>("output_prefix", output_prefix_, std::string(""));
+    std::string dataset_prefix_override;
+    if (pnh_.getParam("dataset_prefix", dataset_prefix_override) && !dataset_prefix_override.empty())
+    {
+      output_prefix_ = dataset_prefix_override;
+    }
+    if (output_prefix_.empty())
+    {
+      output_prefix_ = "world_robot_calib_dataset_" + arm_name_;
+    }
     if (output_dataset_csv_.empty())
     {
       const ros::Time now = ros::Time::now();
       const std::string stamp = std::to_string(static_cast<long long>(now.toSec()));
       boost::filesystem::create_directories(output_dir_);
-      output_dataset_csv_ = output_dir_ + "/" + output_prefix_ + "_" + stamp + "_" + arm_name_ + ".csv";
+      std::string final_prefix = output_prefix_;
+      if (final_prefix.find(arm_name_) == std::string::npos)
+      {
+        final_prefix += "_" + arm_name_;
+      }
+      output_dataset_csv_ = output_dir_ + "/" + final_prefix + "_" + stamp + ".csv";
     }
 
     linear_move_client_ = nh_.serviceClient<jaka_msgs::Move>(linear_move_service_);
@@ -198,7 +235,7 @@ public:
 
     initDatasetFile();
 
-    ROS_INFO("[CalibRecorder] 臂标识=%s, 标定姿态数: %zu", arm_name_.c_str(), poses_.size());
+    ROS_INFO("[CalibRecorder] 臂标识=%s (robot_id=%d), 标定姿态数: %zu", arm_name_.c_str(), robot_id_, poses_.size());
     ROS_INFO("[CalibRecorder] 速度缩放=%.2f, 线速度=%.1f mm/s, 线加速度=%.1f mm/s^2", speed_scale_, linear_speed_mm_s_, linear_acc_mm_s2_);
     ROS_INFO("[CalibRecorder] 采样窗口：前等待 %.2f s，窗口 %.2f s，后等待 %.2f s", wait_before_sample_sec_, sample_duration_sec_,
              wait_after_sample_sec_);
@@ -226,6 +263,7 @@ private:
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
 
+  int robot_id_ = 1;
   std::string arm_name_;
   std::string calib_pose_csv_;
   std::string linear_move_service_;
@@ -291,7 +329,7 @@ private:
     std::ofstream fout(output_dataset_csv_, std::ios::out | std::ios::trunc);
     fout.setf(std::ios::fixed);
     fout.precision(6);
-    fout << "sample_id,pose_idx,stamp,cam_frame,cube_frame,cam_cube_tx,cam_cube_ty,cam_cube_tz,cam_cube_qx,cam_cube_qy,cam_cube_qz,cam_cube_qw,";
+    fout << "sample_id,robot_name,robot_id,pose_idx,stamp,cam_frame,cube_frame,cam_cube_tx,cam_cube_ty,cam_cube_tz,cam_cube_qx,cam_cube_qy,cam_cube_qz,cam_cube_qw,";
     fout << "base_frame,tool_frame,base_tool_tx,base_tool_ty,base_tool_tz,base_tool_qx,base_tool_qy,base_tool_qz,base_tool_qw,";
     fout << "world_frame,camera_frame,world_cam_tx,world_cam_ty,world_cam_tz,world_cam_qx,world_cam_qy,world_cam_qz,world_cam_qw,";
     fout << "world_cube_tx,world_cube_ty,world_cube_tz,world_cube_qx,world_cube_qy,world_cube_qz,world_cube_qw,";
@@ -560,6 +598,7 @@ private:
     if (cube_queue_.empty())
     {
       ++dropped_missing_cube_;
+      ROS_WARN_THROTTLE(1.0, "[CalibRecorder] 尚未收到任何融合位姿，跳过该样本");
       return false;
     }
 
@@ -577,6 +616,8 @@ private:
     if (!found)
     {
       ++dropped_no_sync_cube_;
+      ROS_WARN_THROTTLE(1.0, "[CalibRecorder] 没有找到时间早于 %.3f 的融合位姿（守护 %.3f s），跳过",
+                        cutoff.toSec(), sync_guard_sec_);
       return false;
     }
 
@@ -892,7 +933,7 @@ private:
     std::ofstream fout(output_dataset_csv_, std::ios::out | std::ios::app);
     fout.setf(std::ios::fixed);
     fout.precision(6);
-    fout << sample_id_++ << "," << pose_index << "," << stamp_mean << "," << camera_frame_ << "," << cube_frame_ << ","
+    fout << sample_id_++ << "," << arm_name_ << "," << robot_id_ << "," << pose_index << "," << stamp_mean << "," << camera_frame_ << "," << cube_frame_ << ","
          << t_mean_cam.x() << "," << t_mean_cam.y() << "," << t_mean_cam.z() << ","
          << q_cam.x() << "," << q_cam.y() << "," << q_cam.z() << "," << q_cam.w() << ","
          << base_frame_ << "," << tool_frame_ << ","
