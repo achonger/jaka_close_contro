@@ -226,7 +226,7 @@ public:
     fused_sub_ = nh_.subscribe(fused_topic_, 10, &WorldRobotCalibRecorderNode::cubeCallback, this);
     stats_sub_ = nh_.subscribe(stats_topic_, 10, &WorldRobotCalibRecorderNode::statsCallback, this);
 
-    if (!loadCalibPoses())
+    if (!resolveCalibPosePath() || !loadCalibPoses())
     {
       ROS_ERROR("[CalibRecorder] 无法加载标定姿态 CSV，节点退出");
       ros::shutdown();
@@ -323,6 +323,44 @@ private:
   jaka_close_contro::CubeFusionStats latest_stats_;
   bool has_stats_ = false;
   std::mutex data_mutex_;
+
+  bool resolveCalibPosePath()
+  {
+    if (calib_pose_csv_.empty())
+    {
+      ROS_ERROR("[CalibRecorder] calib_pose_csv 为空，请传入有效路径，或使用默认规则：config/<robot_name>_world_robot_calibration_pose.csv");
+      return false;
+    }
+
+    if (calib_pose_csv_.find("/abs/path/to/") != std::string::npos)
+    {
+      ROS_ERROR("[CalibRecorder] calib_pose_csv 包含占位符 '/abs/path/to/'，请替换为实际路径");
+      return false;
+    }
+
+    boost::filesystem::path path(calib_pose_csv_);
+    if (!path.is_absolute())
+    {
+      const std::string pkg_path = ros::package::getPath("jaka_close_contro");
+      boost::filesystem::path candidate = boost::filesystem::path(pkg_path) / path;
+      if (boost::filesystem::exists(candidate))
+      {
+        calib_pose_csv_ = candidate.string();
+        return true;
+      }
+      path = candidate;
+    }
+
+    if (!boost::filesystem::exists(path))
+    {
+      ROS_ERROR("[CalibRecorder] 标定姿态 CSV 不存在: %s", path.string().c_str());
+      ROS_ERROR("[CalibRecorder] 请确认文件存在，或通过 calib_pose_csv:=<真实路径> 传入，默认规则为 config/<robot_name>_world_robot_calibration_pose.csv");
+      return false;
+    }
+
+    calib_pose_csv_ = path.string();
+    return true;
+  }
 
   void initDatasetFile()
   {

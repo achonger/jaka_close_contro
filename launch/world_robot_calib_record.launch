@@ -11,7 +11,7 @@
   <arg name="tool_frame" default="Link_6" />
 
   <!-- 标定姿态 CSV：优先命令行传入；不给则用包内默认 -->
-  <arg name="calib_pose_csv" default="$(find jaka_close_contro)/config/jaka1_world_robot_calibration_pose.csv" />
+  <arg name="calib_pose_csv" default="$(find jaka_close_contro)/config/$(arg robot_name)_world_robot_calibration_pose.csv" />
 
   <!-- 数据集输出目录 -->
   <arg name="dataset_out_dir" default="$(find jaka_close_contro)/config" />
@@ -66,7 +66,7 @@
     <param name="robot_stride" value="100" />
     <param name="id_step" value="10" />
     <param name="face_id_base" value="10" />
-    <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
+    <rosparam subst_value="true" param="robot_ids">$(arg robot_ids)</rosparam>
     <rosparam param="marker_sizes">
       "0": 0.08  <!-- World Tag (80mm) -->
     </rosparam>
@@ -78,7 +78,7 @@
         name="fiducial_relay"
         output="screen">
     <rosparam param="world_ids">[500, 501, 502, 503]</rosparam>
-    <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
+    <rosparam subst_value="true" param="robot_ids">$(arg robot_ids)</rosparam>
     <param name="input_topic" value="/fiducial_transforms"/>
     <param name="output_world_topic" value="/world_fiducials"/>
     <param name="output_tool_topic"  value="/tool_fiducials"/>
