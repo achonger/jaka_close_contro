@@ -37,12 +37,7 @@ public:
     pnh_.param("face_id_base", face_id_base_, 10);
     pnh_.param("num_faces", num_faces_, 4);
     pnh_.param("markers_per_face", markers_per_face_, 4);
-    if (pnh_.hasParam("robot_ids")) {
-      pnh_.getParam("robot_ids", robot_ids_param_);
-    } else {
-      robot_ids_param_.clear();
-      robot_ids_param_.push_back(1);
-    }
+    loadRobotIds();
 
     pnh_.param("world_board_enable", world_board_enable_, true);
     pnh_.param("world_board_output_id", world_board_output_id_, 500);
@@ -450,6 +445,41 @@ private:
       mappings[face_id] = ids;
     }
     return !mappings.empty();
+  }
+
+  void loadRobotIds() {
+    robot_ids_param_.clear();
+    XmlRpc::XmlRpcValue param;
+    if (pnh_.hasParam("robot_ids") && pnh_.getParam("robot_ids", param)) {
+      if (param.getType() == XmlRpc::XmlRpcValue::TypeArray) {
+        for (int i = 0; i < param.size(); ++i) {
+          if (param[i].getType() == XmlRpc::XmlRpcValue::TypeInt) {
+            robot_ids_param_.push_back(static_cast<int>(param[i]));
+          } else if (param[i].getType() == XmlRpc::XmlRpcValue::TypeString) {
+            try {
+              robot_ids_param_.push_back(std::stoi(static_cast<std::string>(param[i])));
+            } catch (...) {
+              ROS_WARN("[Detector] robot_ids 元素解析失败，已跳过");
+            }
+          }
+        }
+      } else if (param.getType() == XmlRpc::XmlRpcValue::TypeString) {
+        std::string ids_str = static_cast<std::string>(param);
+        std::istringstream iss(ids_str);
+        std::string token;
+        while (iss >> token) {
+          try {
+            robot_ids_param_.push_back(std::stoi(token));
+          } catch (...) {
+            ROS_WARN("[Detector] robot_ids 字符串解析失败: %s", token.c_str());
+          }
+        }
+      }
+    }
+
+    if (robot_ids_param_.empty()) {
+      robot_ids_param_.push_back(1);
+    }
   }
 
   std::map<int, std::vector<int>> generateDefaultToolBoards() {
