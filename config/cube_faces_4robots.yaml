@@ -1,0 +1,59 @@
+faces:
+  # jaka1 faces
+  - id: 10
+    translation: [0.025, 0.0, 0.0]
+    rpy_deg: [90, 0, 90]
+  - id: 11
+    translation: [-0.025, 0.0, 0.0]
+    rpy_deg: [90, 0, -90]
+  - id: 12
+    translation: [0.0, 0.025, 0.0]
+    rpy_deg: [90, 0, 180]
+  - id: 13
+    translation: [0.0, -0.025, 0.0]
+    rpy_deg: [90, 0, 0]
+
+  # jaka2 faces
+  - id: 110
+    translation: [0.025, 0.0, 0.0]
+    rpy_deg: [90, 0, 90]
+  - id: 111
+    translation: [-0.025, 0.0, 0.0]
+    rpy_deg: [90, 0, -90]
+  - id: 112
+    translation: [0.0, 0.025, 0.0]
+    rpy_deg: [90, 0, 180]
+  - id: 113
+    translation: [0.0, -0.025, 0.0]
+    rpy_deg: [90, 0, 0]
+
+  # jaka3 faces
+  - id: 210
+    translation: [0.025, 0.0, 0.0]
+    rpy_deg: [90, 0, 90]
+  - id: 211
+    translation: [-0.025, 0.0, 0.0]
+    rpy_deg: [90, 0, -90]
+  - id: 212
+    translation: [0.0, 0.025, 0.0]
+    rpy_deg: [90, 0, 180]
+  - id: 213
+    translation: [0.0, -0.025, 0.0]
+    rpy_deg: [90, 0, 0]
+
+  # jaka4 faces
+  - id: 310
+    translation: [0.025, 0.0, 0.0]
+    rpy_deg: [90, 0, 90]
+  - id: 311
+    translation: [-0.025, 0.0, 0.0]
+    rpy_deg: [90, 0, -90]
+  - id: 312
+    translation: [0.0, 0.025, 0.0]
+    rpy_deg: [90, 0, 180]
+  - id: 313
+    translation: [0.0, -0.025, 0.0]
+    rpy_deg: [90, 0, 0]
+
+tool_offset:
+  translation: [0.0, 0.0, 0.077]

@@ -1,0 +1,25 @@
+robots:
+  - name: jaka1
+    id: 1
+    ip: 192.168.1.100
+    ns: /jaka1
+    base_frame: Link_0
+    tool_frame: Link_6
+  - name: jaka2
+    id: 2
+    ip: 192.168.1.101
+    ns: /jaka2
+    base_frame: Link_0
+    tool_frame: Link_6
+  - name: jaka3
+    id: 3
+    ip: 192.168.1.102
+    ns: /jaka3
+    base_frame: Link_0
+    tool_frame: Link_6
+  - name: jaka4
+    id: 4
+    ip: 192.168.1.103
+    ns: /jaka4
+    base_frame: Link_0
+    tool_frame: Link_6
