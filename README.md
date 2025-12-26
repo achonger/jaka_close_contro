@@ -55,33 +55,24 @@ roslaunch jaka_close_contro cube_fusion_debug.launch robot_ids:="[1,2,3]" output
    - 如需自定义，直接传参 `robot_name`、`robot_id`、`calib_pose_csv`。
 2. **启动采集链路（相机 + 棱方体检测 + 分流 + world->camera + 多机融合 + 录制）**  
    ```bash
+   # 使用默认包内 CSV，推荐直接运行
    roslaunch jaka_close_contro world_robot_calib_record.launch \
-       robot_name:=jaka2 \
-       robot_id:=2 \
-       calib_pose_csv:=/abs/path/to/jaka2_world_robot_calibration_pose.csv \
-       robot_ids:="[1,2,3,4]" \
-       dataset_prefix:=world_robot_calib_dataset
+       robot_name:=jaka1 \
+       robot_id:=1 \
+       robot_ip:=192.168.1.100 \
+       robot_ids:="[1]"
    ```
    - 示例：仅录制 jaka1（只启一份融合节点，避免 load_yaml 报错）
      ```bash
      roslaunch jaka_close_contro world_robot_calib_record.launch \
-       robot_name:=jaka1 \
-       robot_id:=1 \
-       robot_ip:=192.168.1.100 \
-       robot_ids:="[1]" \
-       calib_pose_csv:=/abs/path/to/jaka1_world_robot_calibration_pose.csv \
-       dataset_prefix:=world_robot_calib_dataset
+       robot_name:=jaka1 robot_id:=1 robot_ip:=192.168.1.100 robot_ids:="[1]"
      ```
    - 示例：录制 jaka2
      ```bash
      roslaunch jaka_close_contro world_robot_calib_record.launch \
-       robot_name:=jaka2 \
-       robot_id:=2 \
-       robot_ip:=192.168.1.101 \
-       robot_ids:="[2]" \
-       calib_pose_csv:=/abs/path/to/jaka2_world_robot_calibration_pose.csv \
-       dataset_prefix:=world_robot_calib_dataset
+       robot_name:=jaka2 robot_id:=2 robot_ip:=192.168.1.101 robot_ids:="[2]"
      ```
+   - 请勿使用 `/abs/path/to/...` 占位符路径；节点会提示并退出，请直接填写真实路径或使用默认包内 CSV。
    - `robot_ids` 控制 detector/fusion 生成哪些 face_id；即便只连 jaka2，其他节点也会“空跑”但不会崩溃。  
    - 速度上限锁定 15%：`speed_scale` > 0.15 会被自动截断并告警。
 3. **采样/过滤规则**  

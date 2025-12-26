@@ -42,7 +42,7 @@
     <param name="robot_stride" value="100" />
     <param name="id_step" value="10" />
     <param name="face_id_base" value="10" />
-    <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
+    <rosparam subst_value="true" param="robot_ids">$(arg robot_ids)</rosparam>
     <rosparam param="marker_sizes">
       "0": 0.08
     </rosparam>
@@ -51,7 +51,7 @@
 
   <node pkg="jaka_close_contro" type="fiducial_relay_node" name="fiducial_relay" output="screen">
     <param name="world_id" type="int" value="500" />
-    <rosparam param="robot_ids">$(arg robot_ids)</rosparam>
+    <rosparam subst_value="true" param="robot_ids">$(arg robot_ids)</rosparam>
     <rosparam param="world_ids">[500, 501, 502, 503]</rosparam>
     <param name="input_topic" value="/fiducial_transforms" />
     <param name="output_world_topic" value="/world_fiducials" />
