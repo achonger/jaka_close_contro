@@ -1,23 +1,31 @@
 <launch>
-  <!-- 机器人选择 & 配置 -->
-  <arg name="robots_config" default="$(find jaka_close_contro)/config/robots.yaml" />
+  <!-- 机器人选择 & 配置（ROS1 roslaunch 不支持 load_yaml()；改为静态映射 + 命令行覆盖） -->
   <arg name="robot_name" default="jaka1" />
-  <arg name="robot_id" default="$(eval next((r['id'] for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 1))" />
-  <arg name="robot_ip" default="$(eval next((r['ip'] for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), '192.168.1.100'))" />
-  <arg name="base_frame" default="$(eval next((r.get('base_frame','Link_0') for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 'Link_0'))" />
-  <arg name="tool_frame" default="$(eval next((r.get('tool_frame','Link_6') for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 'Link_6'))" />
-  <arg name="calib_pose_csv_rel" default="$(eval next((r.get('calib_pose_csv','config/jaka1_world_robot_calibration_pose.csv') for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 'config/jaka1_world_robot_calibration_pose.csv'))" />
-  <arg name="dataset_out_dir_rel" default="$(eval next((r.get('dataset_out_dir','config') for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 'config'))" />
-  <arg name="default_offline_yaml_rel" default="$(eval next((r.get('default_offline_yaml','config/world_robot_extrinsic_offline_'+arg('robot_name')+'.yaml') for r in load_yaml(arg('robots_config'))['robots'] if r['name']==arg('robot_name')), 'config/world_robot_extrinsic_offline_'+arg('robot_name')+'.yaml'))" />
-  <arg name="robot_ids" default="$(eval [r['id'] for r in load_yaml(arg('robots_config'))['robots']])" />
+
+  <!-- 若命令行显式传 robot_id/robot_ip，则以命令行为准；否则按 robot_name 映射 -->
+  <arg name="robot_id" default="$(eval {'jaka1':1,'jaka2':2,'jaka3':3,'jaka4':4}.get(arg('robot_name'),1))" />
+  <arg name="robot_ip" default="$(eval {'jaka1':'192.168.1.100','jaka2':'192.168.1.101','jaka3':'192.168.1.102','jaka4':'192.168.1.103'}.get(arg('robot_name'),'192.168.1.100'))" />
+
+  <!-- TF frames 默认值（必要时由命令行覆盖） -->
+  <arg name="base_frame" default="Link_0" />
+  <arg name="tool_frame" default="Link_6" />
+
+  <!-- 标定姿态 CSV：优先命令行传入；不给则用包内默认 -->
+  <arg name="calib_pose_csv" default="$(find jaka_close_contro)/config/jaka1_world_robot_calibration_pose.csv" />
+
+  <!-- 数据集输出目录 -->
+  <arg name="dataset_out_dir" default="$(find jaka_close_contro)/config" />
+
+  <!-- 默认离线标定输出 yaml（仅路径默认，不影响录制节点写 CSV） -->
+  <arg name="default_offline_yaml" default="$(find jaka_close_contro)/config/world_robot_extrinsic_offline_$(arg robot_name).yaml" />
+
+  <!-- 允许启动哪些机器人的融合节点：默认都启；可命令行传 [1] / [1,2] 等 -->
+  <arg name="robot_ids" default="[1,2,3,4]" />
+
   <arg name="faces_yaml" default="$(find jaka_close_contro)/config/cube_faces_4robots.yaml" />
   <arg name="urdf_file" default="$(find jaka_close_contro)/urdf/jaka_zu3.urdf" />
   <arg name="svo_file" default="" />
   <arg name="dataset_prefix" default="world_robot_calib_dataset" />
-
-  <arg name="calib_pose_csv" default="$(find jaka_close_contro)/$(arg calib_pose_csv_rel)" />
-  <arg name="dataset_out_dir" default="$(find jaka_close_contro)/$(arg dataset_out_dir_rel)" />
-  <arg name="default_offline_yaml" default="$(find jaka_close_contro)/$(arg default_offline_yaml_rel)" />
 
   <arg name="enable_jaka1" default="$(eval '1' in str(arg('robot_ids')).replace('[',' ').replace(']',' ').replace(',',' ').split())" />
   <arg name="enable_jaka2" default="$(eval '2' in str(arg('robot_ids')).replace('[',' ').replace(']',' ').replace(',',' ').split())" />
