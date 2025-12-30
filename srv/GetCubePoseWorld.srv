@@ -1,0 +1,6 @@
+# Empty request
+---
+bool ok
+string message
+geometry_msgs/PoseStamped pose
+float64 age_sec

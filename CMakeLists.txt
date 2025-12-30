@@ -36,6 +36,7 @@ add_service_files(FILES
   WorldRobotCalibration.srv
   WorldRobotCollectSample.srv
   SetPoseTarget.srv
+  GetCubePoseWorld.srv
 )
 
 generate_messages(

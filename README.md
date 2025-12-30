@@ -117,76 +117,96 @@ roslaunch jaka_close_contro cube_fusion_debug.launch robot_ids:="[1,2,3]" output
 - `world_robot_calib_offline.py`  
   输入：单机器人 CSV。输出：`world_robot_extrinsic_offline_<robot>.yaml`，包含 world->base 平移+四元数与数据来源路径。
 
-## 多臂位姿级闭环（方案B，Stage1 单臂示例）
+## 多臂位姿级闭环（方案B）使用指南
 
-1. 编译  
-   ```bash
-   cd ~/catkin_ws
-   catkin build jaka_close_contro
-   source devel/setup.bash
-   ```
-2. 启动单臂闭环（示例：jaka1，如需 jaka2 将 robot_name:=jaka2）  
-   ```bash
-   roslaunch jaka_close_contro single_arm_pose_servo_world.launch \
-     robot_name:=jaka1 \
-     cube_pose_topic:=/vision/jaka1/cube_center_world
-   ```
-   - `calib_yaml` 默认指向 `config/world_robot_extrinsic_offline_<robot>.yaml`，可按需覆盖。
-   - 如果暂不下发机器人命令，可设置 `connect_robot:=false`（仍会计算误差）。
-3. 发送目标（world 坐标系）  
-   ```bash
-   rosservice call /pose_servo_world/set_target "target:
-     header: {frame_id: 'world'}
-     pose: {position: {x: 0.20, y: -0.10, z: 0.35},
-            orientation: {x: 0, y: 0, z: 0.7071, w: 0.7071}}"
-   ```
-4. 查看状态/误差  
-   ```bash
-   rostopic echo /pose_servo_world/status
-   rostopic echo /pose_servo_world/err
-   ```
-5. 停止/清除目标  
-   ```bash
-   rosservice call /pose_servo_world/stop
-   rosservice call /pose_servo_world/clear_target
-   ```
-6. 说明  
-   - 节点订阅 world 下的立方体位姿（`~cube_pose_world`），默认 `/vision/<robot>/cube_center_world`，可通过参数覆盖。  
-   - 当视觉超时或未连接机器人时进入 HOLD/IDLE，不影响其他实例（Stage2 多臂将在后续扩展）。  
-   - 误差阈值：`eps_pos_m`（默认 1.5mm）、`eps_ang_deg`（0.5deg）；命令限幅：`v_max`、`w_max_deg`。可通过 rosparam 调整。
+### (0) 编译与环境准备
+```bash
+cd ~/catkin_ws
+catkin build
+source devel/setup.bash
+roscore  # 如未运行，请先启动
+```
 
-### 多臂位姿级闭环（Stage2/3）
+### (1) 启动多臂（可只启/只连部分机械臂）
+- 只启 jaka2+jaka4，并允许连接机器人（待目标才运动）  
+  ```bash
+  roslaunch jaka_close_contro multi_arm_pose_servo_world.launch \
+    enable_jaka1:=false enable_jaka2:=true enable_jaka3:=false enable_jaka4:=true \
+    connect_jaka2:=true connect_jaka4:=true
+  ```
+- 只启 jaka2+jaka4，但禁止连接机器人（绝对不运动，调试视觉/状态）  
+  ```bash
+  roslaunch jaka_close_contro multi_arm_pose_servo_world.launch \
+    enable_jaka1:=false enable_jaka2:=true enable_jaka3:=false enable_jaka4:=true \
+    connect_jaka2:=false connect_jaka4:=false
+  ```
+- 四臂都启用，但只连接 jaka1+jaka2（其余 DISCONNECTED、不影响）  
+  ```bash
+  roslaunch jaka_close_contro multi_arm_pose_servo_world.launch \
+    enable_jaka1:=true enable_jaka2:=true enable_jaka3:=true enable_jaka4:=true \
+    connect_jaka1:=true connect_jaka2:=true connect_jaka3:=false connect_jaka4:=false
+  ```
+- 常用参数覆盖：  
+  - 每臂 `calib_yaml`：`calib_yaml:=/abs/path/to/world_robot_extrinsic_offline_jaka2.yaml`  
+  - 每臂 `cube_pose_topic`：`cube_pose_topic:=/custom/jaka2/world_cube`  
+  - 控制/阈值：`kp_pos`/`kp_ang`/`v_max`/`w_max_deg`/`eps_pos_m`/`eps_ang_deg` 等 rosparam，可在 launch 覆盖。
+- 前提：不设置目标则不会运动；若想确保绝对不动，使用 `connect_jakaX:=false`。
 
-1. 启动多臂（示例：仅启用 jaka2 与 jaka4，并连接机器人）  
-   ```bash
-   roslaunch jaka_close_contro multi_arm_pose_servo_world.launch \
-     enable_jaka1:=false enable_jaka2:=true enable_jaka3:=false enable_jaka4:=true \
-     connect_jaka2:=true connect_jaka4:=true
-   ```
-   - 每个实例默认订阅 `/vision/jakaX/cube_center_world`，加载 `config/world_robot_extrinsic_offline_jakaX.yaml`，并在各自 namespace `/jakaX/pose_servo_world` 下暴露服务与话题。
-   - 若某台机器人未连通或驱动失败，该实例会进入 DISCONNECTED/HOLD，其他臂不受影响。
-2. 发送目标（使用 CLI 脚本；支持 quat 或 RPY）  
-   ```bash
-   rosrun jaka_close_contro send_world_target.py --robot jaka2 \
-     --x 0.20 --y -0.10 --z 0.35 --yaw_deg 90
-   rosrun jaka_close_contro send_world_target.py --robot jaka4 \
-     --x 0.25 --y 0.05 --z 0.32 --qx 0 --qy 0 --qz 0.7071 --qw 0.7071
-   ```
-3. 停止/清除目标  
-   ```bash
-   rosrun jaka_close_contro send_world_target.py --robot jaka2 --stop
-   rosrun jaka_close_contro send_world_target.py --robot jaka2 --clear
-   ```
-4. 查看状态  
-   ```bash
-   rostopic echo /jaka2/pose_servo_world/status
-   rostopic echo /jaka2/pose_servo_world/err
-   ```
-5. 故障与保护说明  
-   - 视觉超时（`vision_timeout_s`）：进入 HOLD，不再下发新命令，错误值仍可查看。  
-   - 超时未收敛（`servo_timeout_s`）：进入 HOLD 并告警。  
-   - 驱动缺失/调用失败：状态切换为 DISCONNECTED；其他臂继续运行。  
-   - 通过 `enable_jakaX`/`connect_jakaX` 控制是否启动或下发命令；可在仿真/离线仅观察误差。
+### (2) 发送目标（world 下 tool/link6 位姿）
+- 推荐脚本（service 调用）：  
+  ```bash
+  rosrun jaka_close_contro send_world_target.py --robot jaka2 \
+    --x 0.20 --y -0.10 --z 0.35 --roll_deg 0 --pitch_deg 0 --yaw_deg 90
+  rosrun jaka_close_contro send_world_target.py --robot jaka4 \
+    --x 0.25 --y -0.05 --z 0.33 --qx 0 --qy 0 --qz 0.7071 --qw 0.7071
+  ```
+- 直接 service（等价于脚本内部调用）：  
+  ```bash
+  rosservice call /jaka2/pose_servo_world/set_target "{target: {header: {frame_id: 'world'}, pose: {position: {x: 0.20, y: -0.10, z: 0.35}, orientation: {x: 0.0, y: 0.0, z: 0.7071, w: 0.7071}}}}"
+  rosservice call /jaka4/pose_servo_world/set_target "{target: {header: {frame_id: 'world'}, pose: {position: {x: 0.25, y: -0.05, z: 0.33}, orientation: {x: 0.0, y: 0.0, z: 0.7071, w: 0.7071}}}}"
+  ```
+
+### (3) 停止 / 清除目标
+- stop：立即进入 HOLD/停止更新命令  
+  ```bash
+  rosservice call /jaka2/pose_servo_world/stop "{}"
+  rosservice call /jaka4/pose_servo_world/stop "{}"
+  ```
+- clear_target：清空目标，回到 IDLE  
+  ```bash
+  rosservice call /jaka2/pose_servo_world/clear_target "{}"
+  rosservice call /jaka4/pose_servo_world/clear_target "{}"
+  ```
+
+### (4) 查看状态
+- status（字符串：state=RUN/IDLE/HOLD/DISCONNECTED, ep(m), etheta(rad), cube_age(s)）：  
+  ```bash
+  rostopic echo /jaka2/pose_servo_world/status
+  rostopic info /jaka2/pose_servo_world/status
+  ```
+- err（Twist：linear=ep(m), angular=etheta(rad)）：  
+  ```bash
+  rostopic echo /jaka2/pose_servo_world/err
+  ```
+- 如无输出，先 `rostopic list` 检查话题是否存在、namespace 是否正确。
+
+### (5) 查询 cube 在 world 下的位姿（本次新增）
+- 直接 service：  
+  ```bash
+  rosservice call /jaka2/pose_servo_world/get_cube_pose_world "{}"
+  ```
+- 脚本：  
+  ```bash
+  rosrun jaka_close_contro get_cube_pose_world.py --robot jaka2
+  ```
+- 返回字段：`ok` / `message` / `pose`（PoseStamped，frame_id=world）/ `age_sec`（当前时间与 pose 时间差，s）。若未收到或超时则 `ok=false` 并给出提示。
+
+### (6) 安全与注意事项
+- 只有 `connect_jakaX:=true` 且设置了目标时才会运动；`connect=false` 可确保绝对不运动。  
+- 视觉超时（`vision_timeout_s`）自动 HOLD；`servo_timeout_s` 超时未收敛也会 HOLD 并告警。  
+- 所有内部计算使用米/弧度，下发前已转换为 driver 所需 mm/弧度；`w_max_deg`/`eps_ang_deg` 会自动转为弧度。  
+- 目标与视觉输入必须是 world frame（frame_id=world），否则会被拒绝或导致异常。  
+- 每臂的 calib_yaml/cube_pose_topic 可独立覆盖；日志会打印加载的外参与订阅 topic。
 
 ## 兼容性与降级
 

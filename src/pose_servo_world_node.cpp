@@ -10,6 +10,7 @@
 #include <Eigen/Geometry>
 #include <jaka_msgs/Move.h>
 #include <jaka_close_contro/SetPoseTarget.h>
+#include <jaka_close_contro/GetCubePoseWorld.h>
 
 #include <string>
 #include <boost/optional.hpp>
@@ -183,11 +184,12 @@ public:
     pnh_.param<double>("kp_ang", kp_ang_, 0.8);
     pnh_.param<double>("v_max", v_max_, 0.02);
     pnh_.param<double>("w_max_deg", w_max_deg_, 10.0);
-    pnh_.param<double>("eps_pos_m", eps_pos_m_, 0.0015);
-    pnh_.param<double>("eps_ang_deg", eps_ang_deg_, 0.5);
-    pnh_.param<double>("vision_timeout_s", vision_timeout_s_, 0.2);
-    pnh_.param<double>("servo_timeout_s", servo_timeout_s_, 10.0);
-    pnh_.param<std::string>("linear_move_service", linear_move_service_, std::string("/jaka_driver/linear_move"));
+  pnh_.param<double>("eps_pos_m", eps_pos_m_, 0.0015);
+  pnh_.param<double>("eps_ang_deg", eps_ang_deg_, 0.5);
+  pnh_.param<double>("vision_timeout_s", vision_timeout_s_, 0.2);
+  pnh_.param<double>("servo_timeout_s", servo_timeout_s_, 10.0);
+    pnh_.param<double>("query_timeout_s", query_timeout_s_, 1.0);
+  pnh_.param<std::string>("linear_move_service", linear_move_service_, std::string("/jaka_driver/linear_move"));
     pnh_.param<std::string>("cube_pose_topic", cube_pose_topic_,
                             std::string("/vision/" + robot_name_ + "/cube_center_world"));
     pnh_.param<std::string>("target_topic", target_topic_, std::string("target_tool_world"));
@@ -237,6 +239,7 @@ public:
     set_target_srv_ = pnh_.advertiseService("set_target", &PoseServoWorld::setTargetSrv, this);
     stop_srv_ = pnh_.advertiseService("stop", &PoseServoWorld::stopSrv, this);
     clear_target_srv_ = pnh_.advertiseService("clear_target", &PoseServoWorld::clearTargetSrv, this);
+    get_cube_pose_srv_ = pnh_.advertiseService("get_cube_pose_world", &PoseServoWorld::getCubePoseSrv, this);
 
     linear_move_client_ = nh_.serviceClient<jaka_msgs::Move>(linear_move_service_);
 
@@ -307,6 +310,31 @@ private:
   {
     target_active_ = false;
     state_ = State::IDLE;
+    return true;
+  }
+
+  bool getCubePoseSrv(jaka_close_contro::GetCubePoseWorld::Request &,
+                      jaka_close_contro::GetCubePoseWorld::Response &res)
+  {
+    if (last_cube_pose_.header.stamp.isZero())
+    {
+      res.ok = false;
+      res.message = "no cube pose received";
+      res.age_sec = -1.0;
+      return true;
+    }
+    res.pose = last_cube_pose_;
+    res.age_sec = (ros::Time::now() - last_cube_pose_.header.stamp).toSec();
+    if (res.age_sec > query_timeout_s_)
+    {
+      res.ok = false;
+      res.message = "cube pose stale";
+    }
+    else
+    {
+      res.ok = true;
+      res.message = "ok";
+    }
     return true;
   }
 
@@ -502,6 +530,7 @@ private:
   double eps_ang_rad_{0.5 * M_PI / 180.0};
   double vision_timeout_s_{0.2};
   double servo_timeout_s_{10.0};
+  double query_timeout_s_{1.0};
   std::string linear_move_service_{"/jaka_driver/linear_move"};
   std::string cube_pose_topic_;
   std::string target_topic_;
@@ -513,6 +542,7 @@ private:
   ros::ServiceServer set_target_srv_;
   ros::ServiceServer stop_srv_;
   ros::ServiceServer clear_target_srv_;
+  ros::ServiceServer get_cube_pose_srv_;
   ros::ServiceClient linear_move_client_;
   ros::Timer control_timer_;
 
