@@ -95,6 +95,12 @@
       <param name="csv_path"      value="$(arg output_csv)_jaka1" />
       <param name="print_rate"    value="$(arg print_rate)" />
       <param name="stats_window"  value="$(arg stats_window)" />
+      <param name="filter_robot_faces" value="true" />
+      <param name="robot_id" value="1" />
+      <param name="face_id_base" value="10" />
+      <param name="robot_stride" value="100" />
+      <param name="num_faces" value="4" />
+      <param name="tf_prefix" value="jaka1_" />
     </node>
   </group>
 
@@ -124,6 +130,12 @@
       <param name="csv_path"      value="$(arg output_csv)_jaka2" />
       <param name="print_rate"    value="$(arg print_rate)" />
       <param name="stats_window"  value="$(arg stats_window)" />
+      <param name="filter_robot_faces" value="true" />
+      <param name="robot_id" value="2" />
+      <param name="face_id_base" value="10" />
+      <param name="robot_stride" value="100" />
+      <param name="num_faces" value="4" />
+      <param name="tf_prefix" value="jaka2_" />
     </node>
   </group>
 
@@ -153,6 +165,12 @@
       <param name="csv_path"      value="$(arg output_csv)_jaka3" />
       <param name="print_rate"    value="$(arg print_rate)" />
       <param name="stats_window"  value="$(arg stats_window)" />
+      <param name="filter_robot_faces" value="true" />
+      <param name="robot_id" value="3" />
+      <param name="face_id_base" value="10" />
+      <param name="robot_stride" value="100" />
+      <param name="num_faces" value="4" />
+      <param name="tf_prefix" value="jaka3_" />
     </node>
   </group>
 
@@ -182,6 +200,12 @@
       <param name="csv_path"      value="$(arg output_csv)_jaka4" />
       <param name="print_rate"    value="$(arg print_rate)" />
       <param name="stats_window"  value="$(arg stats_window)" />
+      <param name="filter_robot_faces" value="true" />
+      <param name="robot_id" value="4" />
+      <param name="face_id_base" value="10" />
+      <param name="robot_stride" value="100" />
+      <param name="num_faces" value="4" />
+      <param name="tf_prefix" value="jaka4_" />
     </node>
   </group>
 </launch>

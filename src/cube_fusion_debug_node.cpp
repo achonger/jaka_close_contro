@@ -13,12 +13,14 @@
 #include <yaml-cpp/yaml.h>
 #include <ros/package.h>
 
+#include <algorithm>
 #include <cmath>
 #include <deque>
 #include <fstream>
 #include <iomanip>
 #include <map>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -53,6 +55,73 @@ public:
   explicit ErrorAccumulator(size_t window_size = 0)
       : window_size_(window_size)
   {
+  }
+
+  static std::string joinIds(const std::vector<int> &ids)
+  {
+    std::ostringstream oss;
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+      if (i > 0)
+      {
+        oss << ",";
+      }
+      oss << ids[i];
+    }
+    return oss.str();
+  }
+
+  bool applyFaceFilter()
+  {
+    ROS_INFO("[FusionDebug] Loading faces from: %s", faces_yaml_path_.c_str());
+    if (!filter_robot_faces_)
+    {
+      ROS_INFO("[FusionDebug] filter_robot_faces disabled; using all faces (%zu)", face_to_cube_.size());
+      return true;
+    }
+
+    std::vector<int> target_ids;
+    if (!allowed_face_ids_.empty())
+    {
+      target_ids = allowed_face_ids_;
+    }
+    else
+    {
+      const int start = face_id_base_ + (robot_id_ - 1) * robot_stride_;
+      for (int i = 0; i < std::max(0, num_faces_); ++i)
+      {
+        target_ids.push_back(start + i);
+      }
+    }
+
+    std::set<int> keep(target_ids.begin(), target_ids.end());
+    for (auto it = face_to_cube_.begin(); it != face_to_cube_.end();)
+    {
+      if (keep.find(it->first) == keep.end())
+      {
+        it = face_to_cube_.erase(it);
+      }
+      else
+      {
+        ++it;
+      }
+    }
+
+    if (face_to_cube_.empty())
+    {
+      ROS_ERROR("[FusionDebug] No faces left after filtering. target_ids={%s}", joinIds(target_ids).c_str());
+      return false;
+    }
+
+    std::vector<int> kept;
+    kept.reserve(face_to_cube_.size());
+    for (const auto &kv : face_to_cube_)
+    {
+      kept.push_back(kv.first);
+    }
+    ROS_INFO("[FusionDebug] filter_robot_faces enabled. robot_id=%d stride=%d base=%d num_faces=%d kept={%s}",
+             robot_id_, robot_stride_, face_id_base_, num_faces_, joinIds(kept).c_str());
+    return true;
   }
 
   void addSample(double pos_err, double ang_err)
@@ -185,10 +254,21 @@ public:
     pnh_.param<bool>("broadcast_tags", broadcast_tags_, true);
     pnh_.param<bool>("broadcast_faces", broadcast_faces_, true);
     pnh_.param<bool>("broadcast_fused", broadcast_fused_, true);
+    pnh_.param<bool>("filter_robot_faces", filter_robot_faces_, false);
+    pnh_.param<int>("robot_id", robot_id_, 1);
+    pnh_.param<int>("face_id_base", face_id_base_, 10);
+    pnh_.param<int>("robot_stride", robot_stride_, 100);
+    pnh_.param<int>("num_faces", num_faces_, 4);
+    pnh_.param<std::string>("tf_prefix", tf_prefix_, std::string(""));
+    pnh_.getParam("allowed_face_ids", allowed_face_ids_);
 
     if (faces_yaml_path_.empty() || !cube_geometry::loadFacesYaml(faces_yaml_path_, face_to_cube_))
     {
       throw std::runtime_error("faces_yaml missing or failed to load");
+    }
+    if (!applyFaceFilter())
+    {
+      throw std::runtime_error("Failed to apply face filter for debug node");
     }
 
     if (!csv_path_.empty())
@@ -230,6 +310,15 @@ public:
 
 private:
   using SyncPolicy = message_filters::sync_policies::ApproximateTime<fiducial_msgs::FiducialTransformArray, geometry_msgs::PoseStamped>;
+
+  std::string childFrameName(const std::string &base) const
+  {
+    if (tf_prefix_.empty())
+    {
+      return base;
+    }
+    return tf_prefix_ + base;
+  }
 
   tf2::Quaternion normalizeQuat(const tf2::Quaternion &qin) const
   {
@@ -331,7 +420,7 @@ private:
       tf2::fromMsg(ft.transform, T_cam_face);
       T_cam_face.setRotation(normalizeQuat(T_cam_face.getRotation()));
 
-      broadcastIfNeeded(T_cam_face, stamp, cam_frame, "tag_" + std::to_string(ft.fiducial_id), broadcast_tags_);
+      broadcastIfNeeded(T_cam_face, stamp, cam_frame, childFrameName("tag_" + std::to_string(ft.fiducial_id)), broadcast_tags_);
 
       tf2::Transform T_cam_cube = T_cam_face * it->second;
       T_cam_cube.setRotation(normalizeQuat(T_cam_cube.getRotation()));
@@ -364,7 +453,8 @@ private:
       sample.weight = weight;
       frame_faces.push_back(sample);
 
-      broadcastIfNeeded(T_cam_cube, stamp, cam_frame, "cube_center_face_" + std::to_string(ft.fiducial_id), broadcast_faces_);
+      broadcastIfNeeded(T_cam_cube, stamp, cam_frame, childFrameName("cube_center_face_" + std::to_string(ft.fiducial_id)),
+                        broadcast_faces_);
 
       if (csv_.is_open())
       {
@@ -391,7 +481,7 @@ private:
     last_stamp_ = stamp;
     has_last_frame_ = true;
 
-    broadcastIfNeeded(fused, stamp, cam_frame, fused_frame_, broadcast_fused_ && !fused_from_tf_);
+    broadcastIfNeeded(fused, stamp, cam_frame, childFrameName(fused_frame_), broadcast_fused_ && !fused_from_tf_);
   }
 
   void printTimer(const ros::TimerEvent &)
@@ -446,6 +536,11 @@ private:
   std::string fused_pose_topic_;
   std::string fused_frame_;
   std::string camera_frame_param_;
+  bool filter_robot_faces_{false};
+  int robot_id_{1};
+  int face_id_base_{10};
+  int robot_stride_{100};
+  int num_faces_{4};
   bool fused_from_tf_{false};
   double print_rate_hz_{10.0};
   std::string csv_path_;
@@ -453,6 +548,8 @@ private:
   bool broadcast_tags_{true};
   bool broadcast_faces_{true};
   bool broadcast_fused_{true};
+  std::vector<int> allowed_face_ids_;
+  std::string tf_prefix_;
 
   std::map<int, tf2::Transform> face_to_cube_;
   std::map<int, ErrorAccumulator> stats_;
@@ -494,4 +591,3 @@ int main(int argc, char **argv)
     return 1;
   }
 }
-

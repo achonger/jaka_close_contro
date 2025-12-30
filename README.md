@@ -48,6 +48,16 @@ roslaunch jaka_close_contro cube_fusion_debug.launch robot_ids:="[1,2,3]" output
 ```
 - 画面中同时出现 jaka1+jaka2 时，将看到 `/vision/jaka1/cube_center` 与 `/vision/jaka2/cube_center` 同时输出；缺失的机械臂只会提示 warn，不会阻塞。
 
+## 按立方体选择的多面融合 Debug（推荐）
+
+- 编译并加载环境：`catkin build jaka_close_contro` 或 `catkin_make`，然后 `source devel/setup.bash`。  
+- 单立方体一键调试（默认使用包内 `config/cube_faces_4robots.yaml`，仅关注该机器人面）
+  ```bash
+  roslaunch jaka_close_contro cube_fusion_debug_select_cube.launch robot_name:=jaka2
+  ```
+  - 常用可选参数：`svo_file:=<bag或svo路径>`（离线回放）、`output_csv:=/tmp/jaka2_fusion_debug.csv`、`fused_from_tf:=true`（改用 TF 里的融合结果进行对比）、`print_rate:=5.0`、`stats_window:=50`。
+  - 过滤验证：即便视野同时出现其他机器人 face_id，调试节点日志/CSV 也只会出现对应机器人（如 jaka2）的一组 face_id（110..113），不会混入 10/210/... 的误差统计。
+
 ## 自动录制世界—基座标定（逐机器人）
 
 1. **选择机器人与姿态列表**  
