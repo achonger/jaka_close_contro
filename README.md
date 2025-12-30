@@ -155,6 +155,39 @@ roslaunch jaka_close_contro cube_fusion_debug.launch robot_ids:="[1,2,3]" output
    - 当视觉超时或未连接机器人时进入 HOLD/IDLE，不影响其他实例（Stage2 多臂将在后续扩展）。  
    - 误差阈值：`eps_pos_m`（默认 1.5mm）、`eps_ang_deg`（0.5deg）；命令限幅：`v_max`、`w_max_deg`。可通过 rosparam 调整。
 
+### 多臂位姿级闭环（Stage2/3）
+
+1. 启动多臂（示例：仅启用 jaka2 与 jaka4，并连接机器人）  
+   ```bash
+   roslaunch jaka_close_contro multi_arm_pose_servo_world.launch \
+     enable_jaka1:=false enable_jaka2:=true enable_jaka3:=false enable_jaka4:=true \
+     connect_jaka2:=true connect_jaka4:=true
+   ```
+   - 每个实例默认订阅 `/vision/jakaX/cube_center_world`，加载 `config/world_robot_extrinsic_offline_jakaX.yaml`，并在各自 namespace `/jakaX/pose_servo_world` 下暴露服务与话题。
+   - 若某台机器人未连通或驱动失败，该实例会进入 DISCONNECTED/HOLD，其他臂不受影响。
+2. 发送目标（使用 CLI 脚本；支持 quat 或 RPY）  
+   ```bash
+   rosrun jaka_close_contro send_world_target.py --robot jaka2 \
+     --x 0.20 --y -0.10 --z 0.35 --yaw_deg 90
+   rosrun jaka_close_contro send_world_target.py --robot jaka4 \
+     --x 0.25 --y 0.05 --z 0.32 --qx 0 --qy 0 --qz 0.7071 --qw 0.7071
+   ```
+3. 停止/清除目标  
+   ```bash
+   rosrun jaka_close_contro send_world_target.py --robot jaka2 --stop
+   rosrun jaka_close_contro send_world_target.py --robot jaka2 --clear
+   ```
+4. 查看状态  
+   ```bash
+   rostopic echo /jaka2/pose_servo_world/status
+   rostopic echo /jaka2/pose_servo_world/err
+   ```
+5. 故障与保护说明  
+   - 视觉超时（`vision_timeout_s`）：进入 HOLD，不再下发新命令，错误值仍可查看。  
+   - 超时未收敛（`servo_timeout_s`）：进入 HOLD 并告警。  
+   - 驱动缺失/调用失败：状态切换为 DISCONNECTED；其他臂继续运行。  
+   - 通过 `enable_jakaX`/`connect_jakaX` 控制是否启动或下发命令；可在仿真/离线仅观察误差。
+
 ## 兼容性与降级
 
 - `robot_ids` 可自由裁剪，未出现的机器人只会输出 warn，不会终止节点。  

@@ -364,6 +364,12 @@ private:
     }
     if (!linear_move_client_.exists())
     {
+      ROS_WARN_THROTTLE(1.0, "[PoseServo] robot driver not available; entering DISCONNECTED");
+      state_ = State::DISCONNECTED;
+      return false;
+    }
+    if (!linear_move_client_.exists())
+    {
       linear_move_client_.waitForExistence(ros::Duration(0.1));
     }
     tf2::Matrix3x3 R;
@@ -390,14 +396,17 @@ private:
     if (!linear_move_client_.call(srv))
     {
       ROS_WARN_THROTTLE(1.0, "[PoseServo] linear_move call failed");
+      state_ = State::DISCONNECTED;
       return false;
     }
     if (srv.response.ret != 0)
     {
       ROS_WARN_THROTTLE(1.0, "[PoseServo] linear_move ret=%d message=%s", srv.response.ret,
                         srv.response.message.c_str());
+      state_ = State::DISCONNECTED;
       return false;
     }
+    state_ = State::RUN;
     return true;
   }
 
@@ -471,6 +480,7 @@ private:
     Eigen::Isometry3d T_base_tool_next = T_world_base_.inverse() * T_world_tool_next;
 
     sendCommand(T_base_tool_next);
+    last_command_time_ = ros::Time::now();
     publishStatus(ep, etheta, cube_age);
   }
 
@@ -510,6 +520,7 @@ private:
   geometry_msgs::PoseStamped target_tool_world_;
   bool target_active_{false};
   ros::Time target_start_time_;
+  ros::Time last_command_time_;
 
   Eigen::Isometry3d T_world_base_{Eigen::Isometry3d::Identity()};
   Eigen::Isometry3d T_tool_to_cube_{Eigen::Isometry3d::Identity()};
