@@ -25,9 +25,9 @@
   - jaka1：face1~4 = 10,11,12,13（面内 marker：0..3,10..13,20..23,30..33）  
   - 其余机械臂整体平移 `robot_stride=100`：jaka2=110..113、jaka3=210..213、jaka4=310..313。
 - **世界板**：2×2，marker IDs=500/501/502/503，世界原点位于整块图案几何中心。
-- **几何参数**（四面同构）  
-  `+X` [0.025, 0, 0], rpy[90, 0, 90]; `-X` [-0.025, 0, 0], rpy[90, 0, -90];  
-  `+Y` [0, 0.025, 0], rpy[90, 0, 180]; `-Y` [0, -0.025, 0], rpy[90, 0, 0]。  
+- **几何参数**（四面同构，单位 m，边长 0.10 m => face->center 偏移 0.05 m）  
+  `+X` [0.05, 0, 0], rpy[90, 0, 90]; `-X` [-0.05, 0, 0], rpy[90, 0, -90];  
+  `+Y` [0, 0.05, 0], rpy[90, 0, 180]; `-Y` [0, -0.05, 0], rpy[90, 0, 0]。  
   配置位于 `config/cube_faces_4robots.yaml`。
 
 ## 配置文件
@@ -56,6 +56,7 @@ roslaunch jaka_close_contro cube_fusion_debug.launch robot_ids:="[1,2,3]" output
   roslaunch jaka_close_contro cube_fusion_debug_select_cube.launch robot_name:=jaka2
   ```
   - 常用可选参数：`svo_file:=<bag或svo路径>`（离线回放）、`output_csv:=/tmp/jaka2_fusion_debug.csv`、`fused_from_tf:=true`（改用 TF 里的融合结果进行对比）、`print_rate:=5.0`、`stats_window:=50`。
+  - 几何单位与边长：`cube_faces_4robots.yaml` 的 translation 以米为单位，当前立方体边长 0.10 m，因此面到中心偏移为 0.05 m。
   - 过滤验证：即便视野同时出现其他机器人 face_id，调试节点日志/CSV 也只会出现对应机器人（如 jaka2）的一组 face_id（110..113），不会混入 10/210/... 的误差统计。
 
 ## 自动录制世界—基座标定（逐机器人）

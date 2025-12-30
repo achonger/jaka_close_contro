@@ -1,68 +1,68 @@
 faces:
   # jaka1
   - id: 10  # +X
-    translation: [0.025, 0.000, 0.000]
+    translation: [0.050, 0.000, 0.000]
     rpy_deg: [90.0, 0.0, 90.0]
 
   - id: 11  # -X
-    translation: [-0.025, 0.000, 0.000]
+    translation: [-0.050, 0.000, 0.000]
     rpy_deg: [90.0, 0.0, -90.0]
 
   - id: 12  # +Y
-    translation: [0.000, 0.025, 0.000]
+    translation: [0.000, 0.050, 0.000]
     rpy_deg: [90.0, 0.0, 180.0]
 
   - id: 13  # -Y
-    translation: [0.000, -0.025, 0.000]
+    translation: [0.000, -0.050, 0.000]
     rpy_deg: [90.0, 0.0, 0.0]
 
   # jaka2
   - id: 110
-    translation: [0.025, 0.000, 0.000]
+    translation: [0.050, 0.000, 0.000]
     rpy_deg: [90.0, 0.0, 90.0]
 
   - id: 111
-    translation: [-0.025, 0.000, 0.000]
+    translation: [-0.050, 0.000, 0.000]
     rpy_deg: [90.0, 0.0, -90.0]
 
   - id: 112
-    translation: [0.000, 0.025, 0.000]
+    translation: [0.000, 0.050, 0.000]
     rpy_deg: [90.0, 0.0, 180.0]
 
   - id: 113
-    translation: [0.000, -0.025, 0.000]
+    translation: [0.000, -0.050, 0.000]
     rpy_deg: [90.0, 0.0, 0.0]
 
   # jaka3
   - id: 210
-    translation: [0.025, 0.000, 0.000]
+    translation: [0.050, 0.000, 0.000]
     rpy_deg: [90.0, 0.0, 90.0]
 
   - id: 211
-    translation: [-0.025, 0.000, 0.000]
+    translation: [-0.050, 0.000, 0.000]
     rpy_deg: [90.0, 0.0, -90.0]
 
   - id: 212
-    translation: [0.000, 0.025, 0.000]
+    translation: [0.000, 0.050, 0.000]
     rpy_deg: [90.0, 0.0, 180.0]
 
   - id: 213
-    translation: [0.000, -0.025, 0.000]
+    translation: [0.000, -0.050, 0.000]
     rpy_deg: [90.0, 0.0, 0.0]
 
   # jaka4
   - id: 310
-    translation: [0.025, 0.000, 0.000]
+    translation: [0.050, 0.000, 0.000]
     rpy_deg: [90.0, 0.0, 90.0]
 
   - id: 311
-    translation: [-0.025, 0.000, 0.000]
+    translation: [-0.050, 0.000, 0.000]
     rpy_deg: [90.0, 0.0, -90.0]
 
   - id: 312
-    translation: [0.000, 0.025, 0.000]
+    translation: [0.000, 0.050, 0.000]
     rpy_deg: [90.0, 0.0, 180.0]
 
   - id: 313
-    translation: [0.000, -0.025, 0.000]
+    translation: [0.000, -0.050, 0.000]
     rpy_deg: [90.0, 0.0, 0.0]
