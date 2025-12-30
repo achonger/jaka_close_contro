@@ -105,20 +105,20 @@ boost::optional<CalibData> loadCalib(const std::string &path)
     if (!root["world_robot_extrinsic_offline"])
     {
       ROS_ERROR("calib yaml missing world_robot_extrinsic_offline");
-      return std::nullopt;
+      return boost::none;
     }
     const auto &wre = root["world_robot_extrinsic_offline"];
     if (!wre["translation"] || !wre["quat_xyzw"])
     {
       ROS_ERROR("calib yaml missing translation/quat_xyzw");
-      return std::nullopt;
+      return boost::none;
     }
     std::vector<double> t = wre["translation"].as<std::vector<double>>();
     std::vector<double> q = wre["quat_xyzw"].as<std::vector<double>>();
     if (t.size() != 3 || q.size() != 4)
     {
       ROS_ERROR("calib yaml malformed translation/quat");
-      return std::nullopt;
+      return boost::none;
     }
     Eigen::Isometry3d T_wb = Eigen::Isometry3d::Identity();
     T_wb.translation() = Eigen::Vector3d(t[0], t[1], t[2]);
@@ -163,7 +163,7 @@ boost::optional<CalibData> loadCalib(const std::string &path)
   catch (const std::exception &e)
   {
     ROS_ERROR("Failed to load calib yaml %s: %s", path.c_str(), e.what());
-    return std::nullopt;
+    return boost::none;
   }
 }
 } // namespace
