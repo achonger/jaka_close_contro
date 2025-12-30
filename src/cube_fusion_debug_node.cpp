@@ -57,73 +57,6 @@ public:
   {
   }
 
-  static std::string joinIds(const std::vector<int> &ids)
-  {
-    std::ostringstream oss;
-    for (size_t i = 0; i < ids.size(); ++i)
-    {
-      if (i > 0)
-      {
-        oss << ",";
-      }
-      oss << ids[i];
-    }
-    return oss.str();
-  }
-
-  bool applyFaceFilter()
-  {
-    ROS_INFO("[FusionDebug] Loading faces from: %s", faces_yaml_path_.c_str());
-    if (!filter_robot_faces_)
-    {
-      ROS_INFO("[FusionDebug] filter_robot_faces disabled; using all faces (%zu)", face_to_cube_.size());
-      return true;
-    }
-
-    std::vector<int> target_ids;
-    if (!allowed_face_ids_.empty())
-    {
-      target_ids = allowed_face_ids_;
-    }
-    else
-    {
-      const int start = face_id_base_ + (robot_id_ - 1) * robot_stride_;
-      for (int i = 0; i < std::max(0, num_faces_); ++i)
-      {
-        target_ids.push_back(start + i);
-      }
-    }
-
-    std::set<int> keep(target_ids.begin(), target_ids.end());
-    for (auto it = face_to_cube_.begin(); it != face_to_cube_.end();)
-    {
-      if (keep.find(it->first) == keep.end())
-      {
-        it = face_to_cube_.erase(it);
-      }
-      else
-      {
-        ++it;
-      }
-    }
-
-    if (face_to_cube_.empty())
-    {
-      ROS_ERROR("[FusionDebug] No faces left after filtering. target_ids={%s}", joinIds(target_ids).c_str());
-      return false;
-    }
-
-    std::vector<int> kept;
-    kept.reserve(face_to_cube_.size());
-    for (const auto &kv : face_to_cube_)
-    {
-      kept.push_back(kv.first);
-    }
-    ROS_INFO("[FusionDebug] filter_robot_faces enabled. robot_id=%d stride=%d base=%d num_faces=%d kept={%s}",
-             robot_id_, robot_stride_, face_id_base_, num_faces_, joinIds(kept).c_str());
-    return true;
-  }
-
   void addSample(double pos_err, double ang_err)
   {
     if (window_size_ > 0)
@@ -310,6 +243,73 @@ public:
 
 private:
   using SyncPolicy = message_filters::sync_policies::ApproximateTime<fiducial_msgs::FiducialTransformArray, geometry_msgs::PoseStamped>;
+
+  static std::string joinIds(const std::vector<int> &ids)
+  {
+    std::ostringstream oss;
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+      if (i > 0)
+      {
+        oss << ",";
+      }
+      oss << ids[i];
+    }
+    return oss.str();
+  }
+
+  bool applyFaceFilter()
+  {
+    ROS_INFO("[FusionDebug] Loading faces from: %s", faces_yaml_path_.c_str());
+    if (!filter_robot_faces_)
+    {
+      ROS_INFO("[FusionDebug] filter_robot_faces disabled; using all faces (%zu)", face_to_cube_.size());
+      return true;
+    }
+
+    std::vector<int> target_ids;
+    if (!allowed_face_ids_.empty())
+    {
+      target_ids = allowed_face_ids_;
+    }
+    else
+    {
+      const int start = face_id_base_ + (robot_id_ - 1) * robot_stride_;
+      for (int i = 0; i < std::max(0, num_faces_); ++i)
+      {
+        target_ids.push_back(start + i);
+      }
+    }
+
+    std::set<int> keep(target_ids.begin(), target_ids.end());
+    for (auto it = face_to_cube_.begin(); it != face_to_cube_.end();)
+    {
+      if (keep.find(it->first) == keep.end())
+      {
+        it = face_to_cube_.erase(it);
+      }
+      else
+      {
+        ++it;
+      }
+    }
+
+    if (face_to_cube_.empty())
+    {
+      ROS_ERROR("[FusionDebug] No faces left after filtering. target_ids={%s}", joinIds(target_ids).c_str());
+      return false;
+    }
+
+    std::vector<int> kept;
+    kept.reserve(face_to_cube_.size());
+    for (const auto &kv : face_to_cube_)
+    {
+      kept.push_back(kv.first);
+    }
+    ROS_INFO("[FusionDebug] filter_robot_faces enabled. robot_id=%d stride=%d base=%d num_faces=%d kept={%s}",
+             robot_id_, robot_stride_, face_id_base_, num_faces_, joinIds(kept).c_str());
+    return true;
+  }
 
   std::string childFrameName(const std::string &base) const
   {
