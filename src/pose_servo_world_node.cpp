@@ -12,7 +12,7 @@
 #include <jaka_close_contro/SetPoseTarget.h>
 
 #include <string>
-#include <optional>
+#include <boost/optional.hpp>
 
 namespace
 {
@@ -96,7 +96,7 @@ Eigen::Matrix<double, 6, 1> computeError(const Eigen::Isometry3d &T_est, const E
   return xi;
 }
 
-std::optional<CalibData> loadCalib(const std::string &path)
+boost::optional<CalibData> loadCalib(const std::string &path)
 {
   try
   {
@@ -209,7 +209,7 @@ public:
         calib_yaml.replace(pos, token.size(), pkg_path);
       }
     }
-    auto calib = loadCalib(calib_yaml);
+    boost::optional<CalibData> calib = loadCalib(calib_yaml);
     if (!calib)
     {
       throw std::runtime_error("calibration load failed");
@@ -372,10 +372,10 @@ private:
     {
       linear_move_client_.waitForExistence(ros::Duration(0.1));
     }
-    tf2::Matrix3x3 R;
     Eigen::Quaterniond q(T_base_tool.rotation());
     q.normalize();
-    R.setValue(q.w(), q.x(), q.y(), q.z());
+    tf2::Quaternion q_tf(q.x(), q.y(), q.z(), q.w());
+    tf2::Matrix3x3 R(q_tf);
     double roll, pitch, yaw;
     R.getRPY(roll, pitch, yaw);
 
