@@ -1,0 +1,536 @@
+#include <ros/ros.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/Twist.h>
+#include <std_msgs/String.h>
+#include <std_srvs/Empty.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <yaml-cpp/yaml.h>
+#include <ros/package.h>
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
+#include <jaka_msgs/Move.h>
+#include <jaka_close_contro/SetPoseTarget.h>
+
+#include <string>
+#include <optional>
+
+namespace
+{
+struct CalibData
+{
+  Eigen::Isometry3d T_world_base{Eigen::Isometry3d::Identity()};
+  Eigen::Isometry3d T_tool_to_cube{Eigen::Isometry3d::Identity()};
+};
+
+Eigen::Isometry3d poseMsgToIso(const geometry_msgs::Pose &p)
+{
+  Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+  T.translation() = Eigen::Vector3d(p.position.x, p.position.y, p.position.z);
+  Eigen::Quaterniond q(p.orientation.w, p.orientation.x, p.orientation.y, p.orientation.z);
+  q.normalize();
+  T.linear() = q.toRotationMatrix();
+  return T;
+}
+
+geometry_msgs::Pose isoToPoseMsg(const Eigen::Isometry3d &T)
+{
+  geometry_msgs::Pose p;
+  p.position.x = T.translation().x();
+  p.position.y = T.translation().y();
+  p.position.z = T.translation().z();
+  Eigen::Quaterniond q(T.rotation());
+  q.normalize();
+  p.orientation.x = q.x();
+  p.orientation.y = q.y();
+  p.orientation.z = q.z();
+  p.orientation.w = q.w();
+  return p;
+}
+
+Eigen::Vector3d logSO3(const Eigen::Matrix3d &R)
+{
+  double cos_theta = (R.trace() - 1.0) * 0.5;
+  cos_theta = std::min(1.0, std::max(-1.0, cos_theta));
+  double theta = std::acos(cos_theta);
+  if (theta < 1e-9)
+  {
+    return Eigen::Vector3d::Zero();
+  }
+  Eigen::Vector3d omega;
+  omega << R(2, 1) - R(1, 2), R(0, 2) - R(2, 0), R(1, 0) - R(0, 1);
+  omega *= 0.5 * theta / std::sin(theta);
+  return omega;
+}
+
+Eigen::Isometry3d expSE3(const Eigen::Matrix<double, 6, 1> &xi)
+{
+  Eigen::Vector3d v = xi.head<3>();
+  Eigen::Vector3d w = xi.tail<3>();
+  double theta = w.norm();
+  Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
+  Eigen::Matrix3d V = Eigen::Matrix3d::Identity();
+  if (theta > 1e-9)
+  {
+    Eigen::Matrix3d wx;
+    wx << 0, -w.z(), w.y(),
+        w.z(), 0, -w.x(),
+        -w.y(), w.x(), 0;
+    R = Eigen::AngleAxisd(theta, w.normalized()).toRotationMatrix();
+    V = Eigen::Matrix3d::Identity() + (1 - std::cos(theta)) / (theta * theta) * wx +
+        (theta - std::sin(theta)) / (theta * theta * theta) * (wx * wx);
+  }
+  Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+  T.linear() = R;
+  T.translation() = V * v;
+  return T;
+}
+
+Eigen::Matrix<double, 6, 1> computeError(const Eigen::Isometry3d &T_est, const Eigen::Isometry3d &T_des)
+{
+  Eigen::Isometry3d T_err = T_est.inverse() * T_des;
+  Eigen::Vector3d ep = T_err.translation();
+  Eigen::Vector3d etheta = logSO3(T_err.rotation());
+  Eigen::Matrix<double, 6, 1> xi;
+  xi.head<3>() = ep;
+  xi.tail<3>() = etheta;
+  return xi;
+}
+
+std::optional<CalibData> loadCalib(const std::string &path)
+{
+  try
+  {
+    YAML::Node root = YAML::LoadFile(path);
+    CalibData out;
+    if (!root["world_robot_extrinsic_offline"])
+    {
+      ROS_ERROR("calib yaml missing world_robot_extrinsic_offline");
+      return std::nullopt;
+    }
+    const auto &wre = root["world_robot_extrinsic_offline"];
+    if (!wre["translation"] || !wre["quat_xyzw"])
+    {
+      ROS_ERROR("calib yaml missing translation/quat_xyzw");
+      return std::nullopt;
+    }
+    std::vector<double> t = wre["translation"].as<std::vector<double>>();
+    std::vector<double> q = wre["quat_xyzw"].as<std::vector<double>>();
+    if (t.size() != 3 || q.size() != 4)
+    {
+      ROS_ERROR("calib yaml malformed translation/quat");
+      return std::nullopt;
+    }
+    Eigen::Isometry3d T_wb = Eigen::Isometry3d::Identity();
+    T_wb.translation() = Eigen::Vector3d(t[0], t[1], t[2]);
+    Eigen::Quaterniond q_wb(q[3], q[0], q[1], q[2]);
+    q_wb.normalize();
+    T_wb.linear() = q_wb.toRotationMatrix();
+    out.T_world_base = T_wb;
+
+    if (wre["tool_extrinsic_tool_to_cube"])
+    {
+      const auto &tool = wre["tool_extrinsic_tool_to_cube"];
+      std::vector<double> t_tc;
+      std::vector<double> q_tc;
+      if (tool["translation_final_m"])
+        t_tc = tool["translation_final_m"].as<std::vector<double>>();
+      else if (tool["translation_init_m"])
+        t_tc = tool["translation_init_m"].as<std::vector<double>>();
+      if (tool["rotation_final_xyzw"])
+        q_tc = tool["rotation_final_xyzw"].as<std::vector<double>>();
+      else if (tool["rotation_init_xyzw"])
+        q_tc = tool["rotation_init_xyzw"].as<std::vector<double>>();
+      if (t_tc.size() == 3 && q_tc.size() == 4)
+      {
+        Eigen::Isometry3d T_tc = Eigen::Isometry3d::Identity();
+        T_tc.translation() = Eigen::Vector3d(t_tc[0], t_tc[1], t_tc[2]);
+        Eigen::Quaterniond qtc(q_tc[3], q_tc[0], q_tc[1], q_tc[2]);
+        qtc.normalize();
+        T_tc.linear() = qtc.toRotationMatrix();
+        out.T_tool_to_cube = T_tc;
+      }
+      else
+      {
+        ROS_WARN("tool_extrinsic_tool_to_cube missing or malformed, using identity");
+      }
+    }
+    else
+    {
+      ROS_WARN("tool_extrinsic_tool_to_cube not found, using identity");
+    }
+    return out;
+  }
+  catch (const std::exception &e)
+  {
+    ROS_ERROR("Failed to load calib yaml %s: %s", path.c_str(), e.what());
+    return std::nullopt;
+  }
+}
+} // namespace
+
+class PoseServoWorld
+{
+public:
+  explicit PoseServoWorld(ros::NodeHandle &nh, ros::NodeHandle &pnh)
+      : nh_(nh), pnh_(pnh)
+  {
+    pnh_.param<std::string>("robot_name", robot_name_, std::string("jaka1"));
+    pnh_.param<int>("robot_id", robot_id_, 1);
+    pnh_.param<bool>("enable", enable_, true);
+    pnh_.param<bool>("connect_robot", connect_robot_, true);
+    pnh_.param<double>("control_rate_hz", control_rate_hz_, 20.0);
+    pnh_.param<double>("kp_pos", kp_pos_, 0.6);
+    pnh_.param<double>("kp_ang", kp_ang_, 0.8);
+    pnh_.param<double>("v_max", v_max_, 0.02);
+    pnh_.param<double>("w_max_deg", w_max_deg_, 10.0);
+    pnh_.param<double>("eps_pos_m", eps_pos_m_, 0.0015);
+    pnh_.param<double>("eps_ang_deg", eps_ang_deg_, 0.5);
+    pnh_.param<double>("vision_timeout_s", vision_timeout_s_, 0.2);
+    pnh_.param<double>("servo_timeout_s", servo_timeout_s_, 10.0);
+    pnh_.param<std::string>("linear_move_service", linear_move_service_, std::string("/jaka_driver/linear_move"));
+    pnh_.param<std::string>("cube_pose_topic", cube_pose_topic_,
+                            std::string("/vision/" + robot_name_ + "/cube_center_world"));
+    pnh_.param<std::string>("target_topic", target_topic_, std::string("target_tool_world"));
+    std::string calib_yaml;
+    pnh_.param<std::string>("calib_yaml", calib_yaml,
+                            std::string("$(find jaka_close_contro)/config/world_robot_extrinsic_offline_" + robot_name_ + ".yaml"));
+
+    w_max_rad_ = w_max_deg_ * M_PI / 180.0;
+    eps_ang_rad_ = eps_ang_deg_ * M_PI / 180.0;
+
+    // Resolve calib path (expand package keyword if present)
+    if (calib_yaml.find("$(find") != std::string::npos)
+    {
+      std::string pkg_path = ros::package::getPath("jaka_close_contro");
+      std::string token = "$(find jaka_close_contro)";
+      size_t pos = calib_yaml.find(token);
+      if (pos != std::string::npos)
+      {
+        calib_yaml.replace(pos, token.size(), pkg_path);
+      }
+    }
+    auto calib = loadCalib(calib_yaml);
+    if (!calib)
+    {
+      throw std::runtime_error("calibration load failed");
+    }
+    T_world_base_ = calib->T_world_base;
+    T_tool_to_cube_ = calib->T_tool_to_cube;
+
+    ROS_INFO("[PoseServo] robot=%s id=%d enable=%s connect_robot=%s", robot_name_.c_str(), robot_id_,
+             enable_ ? "true" : "false", connect_robot_ ? "true" : "false");
+    ROS_INFO("[PoseServo] T_world_base t=[%.4f %.4f %.4f]", T_world_base_.translation().x(),
+             T_world_base_.translation().y(), T_world_base_.translation().z());
+    Eigen::Quaterniond qwb(T_world_base_.rotation());
+    ROS_INFO("[PoseServo] T_world_base q=[%.4f %.4f %.4f %.4f]", qwb.x(), qwb.y(), qwb.z(), qwb.w());
+    ROS_INFO("[PoseServo] T_tool_to_cube t=[%.4f %.4f %.4f]", T_tool_to_cube_.translation().x(),
+             T_tool_to_cube_.translation().y(), T_tool_to_cube_.translation().z());
+    Eigen::Quaterniond qtc(T_tool_to_cube_.rotation());
+    ROS_INFO("[PoseServo] T_tool_to_cube q=[%.4f %.4f %.4f %.4f]", qtc.x(), qtc.y(), qtc.z(), qtc.w());
+    ROS_INFO("[PoseServo] cube_pose_topic=%s target_topic=%s", cube_pose_topic_.c_str(), target_topic_.c_str());
+
+    cube_sub_ = nh_.subscribe(cube_pose_topic_, 1, &PoseServoWorld::cubeCb, this);
+    target_sub_ = pnh_.subscribe(target_topic_, 1, &PoseServoWorld::targetCb, this);
+    status_pub_ = pnh_.advertise<std_msgs::String>("status", 1, true);
+    err_pub_ = pnh_.advertise<geometry_msgs::Twist>("err", 1, true);
+
+    set_target_srv_ = pnh_.advertiseService("set_target", &PoseServoWorld::setTargetSrv, this);
+    stop_srv_ = pnh_.advertiseService("stop", &PoseServoWorld::stopSrv, this);
+    clear_target_srv_ = pnh_.advertiseService("clear_target", &PoseServoWorld::clearTargetSrv, this);
+
+    linear_move_client_ = nh_.serviceClient<jaka_msgs::Move>(linear_move_service_);
+
+    control_timer_ = nh_.createTimer(ros::Duration(1.0 / control_rate_hz_), &PoseServoWorld::controlTimer, this);
+  }
+
+private:
+  enum class State
+  {
+    IDLE,
+    RUN,
+    HOLD,
+    DISCONNECTED
+  };
+
+  void cubeCb(const geometry_msgs::PoseStamped::ConstPtr &msg)
+  {
+    if (msg->header.frame_id != "world")
+    {
+      ROS_WARN_THROTTLE(1.0, "[PoseServo] cube pose frame_id=%s (expected world)", msg->header.frame_id.c_str());
+    }
+    last_cube_pose_ = *msg;
+  }
+
+  void targetCb(const geometry_msgs::PoseStamped::ConstPtr &msg)
+  {
+    if (msg->header.frame_id != "world")
+    {
+      ROS_WARN_THROTTLE(1.0, "[PoseServo] target frame_id=%s (expected world)", msg->header.frame_id.c_str());
+      return;
+    }
+    target_tool_world_ = *msg;
+    target_active_ = true;
+    target_start_time_ = ros::Time::now();
+    state_ = State::RUN;
+  }
+
+  bool setTargetSrv(jaka_close_contro::SetPoseTarget::Request &req,
+                    jaka_close_contro::SetPoseTarget::Response &res)
+  {
+    if (req.target.header.frame_id != "world" && !req.target.header.frame_id.empty())
+    {
+      res.ok = false;
+      res.message = "frame_id must be world";
+      return true;
+    }
+    target_tool_world_ = req.target;
+    if (target_tool_world_.header.stamp == ros::Time(0))
+    {
+      target_tool_world_.header.stamp = ros::Time::now();
+    }
+    target_active_ = true;
+    target_start_time_ = ros::Time::now();
+    state_ = State::RUN;
+    res.ok = true;
+    res.message = "target accepted";
+    return true;
+  }
+
+  bool stopSrv(std_srvs::Empty::Request &, std_srvs::Empty::Response &)
+  {
+    state_ = State::HOLD;
+    target_active_ = false;
+    return true;
+  }
+
+  bool clearTargetSrv(std_srvs::Empty::Request &, std_srvs::Empty::Response &)
+  {
+    target_active_ = false;
+    state_ = State::IDLE;
+    return true;
+  }
+
+  void publishStatus(const Eigen::Vector3d &ep, const Eigen::Vector3d &etheta, double age)
+  {
+    std_msgs::String msg;
+    std::stringstream ss;
+    ss << "state=" << stateToString(state_) << " ep=" << ep.norm() << " etheta=" << etheta.norm()
+       << " cube_age=" << age;
+    msg.data = ss.str();
+    status_pub_.publish(msg);
+
+    geometry_msgs::Twist err;
+    err.linear.x = ep.x();
+    err.linear.y = ep.y();
+    err.linear.z = ep.z();
+    err.angular.x = etheta.x();
+    err.angular.y = etheta.y();
+    err.angular.z = etheta.z();
+    err_pub_.publish(err);
+  }
+
+  std::string stateToString(State s) const
+  {
+    switch (s)
+    {
+    case State::IDLE:
+      return "IDLE";
+    case State::RUN:
+      return "RUN";
+    case State::HOLD:
+      return "HOLD";
+    case State::DISCONNECTED:
+      return "DISCONNECTED";
+    }
+    return "UNKNOWN";
+  }
+
+  bool visionTimedOut(double &age_out) const
+  {
+    if (!last_cube_pose_.header.stamp.isZero())
+    {
+      age_out = (ros::Time::now() - last_cube_pose_.header.stamp).toSec();
+      return age_out > vision_timeout_s_;
+    }
+    age_out = 1e9;
+    return true;
+  }
+
+  bool sendCommand(const Eigen::Isometry3d &T_base_tool)
+  {
+    if (!connect_robot_)
+    {
+      return true;
+    }
+    if (!linear_move_client_.exists())
+    {
+      linear_move_client_.waitForExistence(ros::Duration(0.1));
+    }
+    tf2::Matrix3x3 R;
+    Eigen::Quaterniond q(T_base_tool.rotation());
+    q.normalize();
+    R.setValue(q.w(), q.x(), q.y(), q.z());
+    double roll, pitch, yaw;
+    R.getRPY(roll, pitch, yaw);
+
+    jaka_msgs::Move srv;
+    srv.request.pose = {static_cast<float>(T_base_tool.translation().x() * 1000.0),
+                        static_cast<float>(T_base_tool.translation().y() * 1000.0),
+                        static_cast<float>(T_base_tool.translation().z() * 1000.0),
+                        static_cast<float>(roll),
+                        static_cast<float>(pitch),
+                        static_cast<float>(yaw)};
+    srv.request.mvvelo = static_cast<float>(v_max_ * 1000.0);  // mm/s
+    srv.request.mvacc = static_cast<float>(v_max_ * 1000.0 * 2); // rough acc
+    srv.request.mvtime = 0.0;
+    srv.request.mvradii = 0.0;
+    srv.request.coord_mode = 0;
+    srv.request.index = 0;
+
+    if (!linear_move_client_.call(srv))
+    {
+      ROS_WARN_THROTTLE(1.0, "[PoseServo] linear_move call failed");
+      return false;
+    }
+    if (srv.response.ret != 0)
+    {
+      ROS_WARN_THROTTLE(1.0, "[PoseServo] linear_move ret=%d message=%s", srv.response.ret,
+                        srv.response.message.c_str());
+      return false;
+    }
+    return true;
+  }
+
+  void controlTimer(const ros::TimerEvent &)
+  {
+    double cube_age = 0.0;
+    if (visionTimedOut(cube_age))
+    {
+      if (state_ == State::RUN)
+      {
+        state_ = State::HOLD;
+        ROS_WARN_THROTTLE(1.0, "[PoseServo] vision timeout, holding commands");
+      }
+      publishStatus(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), cube_age);
+      return;
+    }
+    if (!target_active_)
+    {
+      publishStatus(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), cube_age);
+      return;
+    }
+    if (state_ == State::DISCONNECTED || !enable_)
+    {
+      publishStatus(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), cube_age);
+      return;
+    }
+
+    if ((ros::Time::now() - target_start_time_).toSec() > servo_timeout_s_)
+    {
+      ROS_WARN_THROTTLE(1.0, "[PoseServo] servo timeout, holding");
+      state_ = State::HOLD;
+      publishStatus(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), cube_age);
+      return;
+    }
+
+    Eigen::Isometry3d T_world_cube_est = poseMsgToIso(last_cube_pose_.pose);
+    Eigen::Isometry3d T_world_tool_des = poseMsgToIso(target_tool_world_.pose);
+
+    Eigen::Isometry3d T_world_cube_des = T_world_tool_des * T_tool_to_cube_;
+    Eigen::Matrix<double, 6, 1> xi = computeError(T_world_cube_est, T_world_cube_des);
+    Eigen::Vector3d ep = xi.head<3>();
+    Eigen::Vector3d etheta = xi.tail<3>();
+
+    if (ep.norm() < eps_pos_m_ && etheta.norm() < eps_ang_rad_)
+    {
+      state_ = State::IDLE;
+      target_active_ = false;
+      publishStatus(ep, etheta, cube_age);
+      return;
+    }
+
+    Eigen::Vector3d v_cmd = kp_pos_ * ep;
+    Eigen::Vector3d w_cmd = kp_ang_ * etheta;
+    if (v_cmd.norm() > v_max_)
+    {
+      v_cmd = v_cmd.normalized() * v_max_;
+    }
+    if (w_cmd.norm() > w_max_rad_)
+    {
+      w_cmd = w_cmd.normalized() * w_max_rad_;
+    }
+
+    Eigen::Matrix<double, 6, 1> xi_cmd;
+    xi_cmd.head<3>() = v_cmd;
+    xi_cmd.tail<3>() = w_cmd;
+    double dt = 1.0 / control_rate_hz_;
+    Eigen::Isometry3d Delta = expSE3(xi_cmd * dt);
+    Eigen::Isometry3d T_world_cube_next = T_world_cube_est * Delta;
+    Eigen::Isometry3d T_cube_to_tool = T_tool_to_cube_.inverse();
+    Eigen::Isometry3d T_world_tool_next = T_world_cube_next * T_cube_to_tool;
+    Eigen::Isometry3d T_base_tool_next = T_world_base_.inverse() * T_world_tool_next;
+
+    sendCommand(T_base_tool_next);
+    publishStatus(ep, etheta, cube_age);
+  }
+
+  ros::NodeHandle nh_;
+  ros::NodeHandle pnh_;
+
+  std::string robot_name_;
+  int robot_id_{1};
+  bool enable_{true};
+  bool connect_robot_{true};
+  double control_rate_hz_{20.0};
+  double kp_pos_{0.6};
+  double kp_ang_{0.8};
+  double v_max_{0.02};
+  double w_max_deg_{10.0};
+  double w_max_rad_{10.0 * M_PI / 180.0};
+  double eps_pos_m_{0.0015};
+  double eps_ang_deg_{0.5};
+  double eps_ang_rad_{0.5 * M_PI / 180.0};
+  double vision_timeout_s_{0.2};
+  double servo_timeout_s_{10.0};
+  std::string linear_move_service_{"/jaka_driver/linear_move"};
+  std::string cube_pose_topic_;
+  std::string target_topic_;
+
+  ros::Subscriber cube_sub_;
+  ros::Subscriber target_sub_;
+  ros::Publisher status_pub_;
+  ros::Publisher err_pub_;
+  ros::ServiceServer set_target_srv_;
+  ros::ServiceServer stop_srv_;
+  ros::ServiceServer clear_target_srv_;
+  ros::ServiceClient linear_move_client_;
+  ros::Timer control_timer_;
+
+  geometry_msgs::PoseStamped last_cube_pose_;
+  geometry_msgs::PoseStamped target_tool_world_;
+  bool target_active_{false};
+  ros::Time target_start_time_;
+
+  Eigen::Isometry3d T_world_base_{Eigen::Isometry3d::Identity()};
+  Eigen::Isometry3d T_tool_to_cube_{Eigen::Isometry3d::Identity()};
+
+  State state_{State::IDLE};
+};
+
+int main(int argc, char **argv)
+{
+  ros::init(argc, argv, "pose_servo_world_node");
+  ros::NodeHandle nh;
+  ros::NodeHandle pnh("~");
+  try
+  {
+    PoseServoWorld node(nh, pnh);
+    ros::spin();
+  }
+  catch (const std::exception &e)
+  {
+    ROS_FATAL("Failed to start pose_servo_world: %s", e.what());
+    return 1;
+  }
+  return 0;
+}

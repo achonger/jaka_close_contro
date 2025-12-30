@@ -117,6 +117,44 @@ roslaunch jaka_close_contro cube_fusion_debug.launch robot_ids:="[1,2,3]" output
 - `world_robot_calib_offline.py`  
   输入：单机器人 CSV。输出：`world_robot_extrinsic_offline_<robot>.yaml`，包含 world->base 平移+四元数与数据来源路径。
 
+## 多臂位姿级闭环（方案B，Stage1 单臂示例）
+
+1. 编译  
+   ```bash
+   cd ~/catkin_ws
+   catkin build jaka_close_contro
+   source devel/setup.bash
+   ```
+2. 启动单臂闭环（示例：jaka1，如需 jaka2 将 robot_name:=jaka2）  
+   ```bash
+   roslaunch jaka_close_contro single_arm_pose_servo_world.launch \
+     robot_name:=jaka1 \
+     cube_pose_topic:=/vision/jaka1/cube_center_world
+   ```
+   - `calib_yaml` 默认指向 `config/world_robot_extrinsic_offline_<robot>.yaml`，可按需覆盖。
+   - 如果暂不下发机器人命令，可设置 `connect_robot:=false`（仍会计算误差）。
+3. 发送目标（world 坐标系）  
+   ```bash
+   rosservice call /pose_servo_world/set_target "target:
+     header: {frame_id: 'world'}
+     pose: {position: {x: 0.20, y: -0.10, z: 0.35},
+            orientation: {x: 0, y: 0, z: 0.7071, w: 0.7071}}"
+   ```
+4. 查看状态/误差  
+   ```bash
+   rostopic echo /pose_servo_world/status
+   rostopic echo /pose_servo_world/err
+   ```
+5. 停止/清除目标  
+   ```bash
+   rosservice call /pose_servo_world/stop
+   rosservice call /pose_servo_world/clear_target
+   ```
+6. 说明  
+   - 节点订阅 world 下的立方体位姿（`~cube_pose_world`），默认 `/vision/<robot>/cube_center_world`，可通过参数覆盖。  
+   - 当视觉超时或未连接机器人时进入 HOLD/IDLE，不影响其他实例（Stage2 多臂将在后续扩展）。  
+   - 误差阈值：`eps_pos_m`（默认 1.5mm）、`eps_ang_deg`（0.5deg）；命令限幅：`v_max`、`w_max_deg`。可通过 rosparam 调整。
+
 ## 兼容性与降级
 
 - `robot_ids` 可自由裁剪，未出现的机器人只会输出 warn，不会终止节点。  

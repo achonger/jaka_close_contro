@@ -35,6 +35,7 @@ add_message_files(FILES
 add_service_files(FILES
   WorldRobotCalibration.srv
   WorldRobotCollectSample.srv
+  SetPoseTarget.srv
 )
 
 generate_messages(
@@ -123,6 +124,13 @@ target_link_libraries(cube_fusion_debug_node
   ${YAML_CPP_LIBRARIES}
 )
 add_dependencies(cube_fusion_debug_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+add_executable(pose_servo_world_node src/pose_servo_world_node.cpp)
+target_link_libraries(pose_servo_world_node
+  ${catkin_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
+)
+add_dependencies(pose_servo_world_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 # 安装配置文件
 install(DIRECTORY launch config rviz
