@@ -268,12 +268,14 @@ public:
     pnh_.param<double>("kp_ang", kp_ang_, 0.8);
     pnh_.param<double>("v_max", v_max_, 0.02);
     pnh_.param<double>("w_max_deg", w_max_deg_, 10.0);
-  pnh_.param<double>("eps_pos_m", eps_pos_m_, 0.0015);
-  pnh_.param<double>("eps_ang_deg", eps_ang_deg_, 0.5);
-  pnh_.param<double>("vision_timeout_s", vision_timeout_s_, 0.2);
-  pnh_.param<double>("servo_timeout_s", servo_timeout_s_, 10.0);
+    pnh_.param<double>("eps_pos_m", eps_pos_m_, 0.0015);
+    pnh_.param<double>("eps_ang_deg", eps_ang_deg_, 0.5);
+    pnh_.param<double>("vision_timeout_s", vision_timeout_s_, 0.2);
+    pnh_.param<double>("servo_timeout_s", servo_timeout_s_, 10.0);
     pnh_.param<double>("query_timeout_s", query_timeout_s_, 1.0);
-  pnh_.param<std::string>("linear_move_service", linear_move_service_, std::string("/jaka_driver/linear_move"));
+    pnh_.param<std::string>("linear_move_service", linear_move_service_, std::string("jaka_driver/linear_move"));
+    pnh_.param<std::string>("world_frame", world_frame_, std::string("world"));
+    pnh_.param<bool>("strict_cube_frame", strict_cube_frame_, true);
     pnh_.param<std::string>("cube_pose_topic", cube_pose_topic_,
                             std::string("/vision/" + robot_name_ + "/cube_center_world"));
     pnh_.param<std::string>("target_topic", target_topic_, std::string("target_tool_world"));
@@ -305,6 +307,7 @@ public:
 
     ROS_INFO("[PoseServo] robot=%s id=%d enable=%s connect_robot=%s", robot_name_.c_str(), robot_id_,
              enable_ ? "true" : "false", connect_robot_ ? "true" : "false");
+    ROS_INFO("[PoseServo] linear_move_service=%s", linear_move_service_.c_str());
     ROS_INFO("[PoseServo] T_world_base t=[%.4f %.4f %.4f]", T_world_base_.translation().x(),
              T_world_base_.translation().y(), T_world_base_.translation().z());
     Eigen::Quaterniond qwb(T_world_base_.rotation());
@@ -341,18 +344,39 @@ private:
 
   void cubeCb(const geometry_msgs::PoseStamped::ConstPtr &msg)
   {
-    if (msg->header.frame_id != "world")
+    if (msg->header.frame_id != world_frame_)
     {
-      ROS_WARN_THROTTLE(1.0, "[PoseServo] cube pose frame_id=%s (expected world)", msg->header.frame_id.c_str());
+      if (strict_cube_frame_)
+      {
+        ROS_WARN_THROTTLE(1.0, "[PoseServo] cube pose frame_id=%s (expected %s); dropping message",
+                          msg->header.frame_id.c_str(), world_frame_.c_str());
+        return;
+      }
+      else
+      {
+        ROS_WARN_THROTTLE(1.0, "[PoseServo] cube pose frame_id=%s (expected %s)", msg->header.frame_id.c_str(),
+                          world_frame_.c_str());
+      }
     }
     last_cube_pose_ = *msg;
+    have_cube_pose_ = true;
+    last_cube_rx_wall_ = ros::WallTime::now();
+    if (last_cube_pose_.header.stamp.isZero())
+    {
+      ros::Time now = ros::Time::now();
+      if (!now.isZero())
+      {
+        last_cube_pose_.header.stamp = now;
+      }
+    }
   }
 
   void targetCb(const geometry_msgs::PoseStamped::ConstPtr &msg)
   {
-    if (msg->header.frame_id != "world")
+    if (msg->header.frame_id != world_frame_)
     {
-      ROS_WARN_THROTTLE(1.0, "[PoseServo] target frame_id=%s (expected world)", msg->header.frame_id.c_str());
+      ROS_WARN_THROTTLE(1.0, "[PoseServo] target frame_id=%s (expected %s)", msg->header.frame_id.c_str(),
+                        world_frame_.c_str());
       return;
     }
     target_tool_world_ = *msg;
@@ -364,10 +388,10 @@ private:
   bool setTargetSrv(jaka_close_contro::SetPoseTarget::Request &req,
                     jaka_close_contro::SetPoseTarget::Response &res)
   {
-    if (req.target.header.frame_id != "world" && !req.target.header.frame_id.empty())
+    if (req.target.header.frame_id != world_frame_ && !req.target.header.frame_id.empty())
     {
       res.ok = false;
-      res.message = "frame_id must be world";
+      res.message = "frame_id must match world_frame";
       return true;
     }
     target_tool_world_ = req.target;
@@ -400,7 +424,8 @@ private:
   bool getCubePoseSrv(jaka_close_contro::GetCubePoseWorld::Request &,
                       jaka_close_contro::GetCubePoseWorld::Response &res)
   {
-    if (last_cube_pose_.header.stamp.isZero())
+    double age_sec = 0.0;
+    if (!computeCubeAgeSec(age_sec))
     {
       res.ok = false;
       res.message = "no cube pose received";
@@ -408,7 +433,7 @@ private:
       return true;
     }
     res.pose = last_cube_pose_;
-    res.age_sec = (ros::Time::now() - last_cube_pose_.header.stamp).toSec();
+    res.age_sec = age_sec;
     if (res.age_sec > query_timeout_s_)
     {
       res.ok = false;
@@ -457,15 +482,29 @@ private:
     return "UNKNOWN";
   }
 
+  bool computeCubeAgeSec(double &age_out) const
+  {
+    if (!have_cube_pose_)
+    {
+      age_out = 1e9;
+      return false;
+    }
+    ros::Time now = ros::Time::now();
+    if (!now.isZero() && !last_cube_pose_.header.stamp.isZero())
+    {
+      age_out = (now - last_cube_pose_.header.stamp).toSec();
+    }
+    else
+    {
+      age_out = (ros::WallTime::now() - last_cube_rx_wall_).toSec();
+    }
+    return true;
+  }
+
   bool visionTimedOut(double &age_out) const
   {
-    if (!last_cube_pose_.header.stamp.isZero())
-    {
-      age_out = (ros::Time::now() - last_cube_pose_.header.stamp).toSec();
-      return age_out > vision_timeout_s_;
-    }
-    age_out = 1e9;
-    return true;
+    computeCubeAgeSec(age_out);
+    return age_out > vision_timeout_s_;
   }
 
   bool sendCommand(const Eigen::Isometry3d &T_base_tool)
@@ -615,9 +654,11 @@ private:
   double vision_timeout_s_{0.2};
   double servo_timeout_s_{10.0};
   double query_timeout_s_{1.0};
-  std::string linear_move_service_{"/jaka_driver/linear_move"};
+  std::string linear_move_service_{"jaka_driver/linear_move"};
   std::string cube_pose_topic_;
   std::string target_topic_;
+  std::string world_frame_{"world"};
+  bool strict_cube_frame_{true};
 
   ros::Subscriber cube_sub_;
   ros::Subscriber target_sub_;
@@ -635,6 +676,8 @@ private:
   bool target_active_{false};
   ros::Time target_start_time_;
   ros::Time last_command_time_;
+  bool have_cube_pose_{false};
+  ros::WallTime last_cube_rx_wall_;
 
   Eigen::Isometry3d T_world_base_{Eigen::Isometry3d::Identity()};
   Eigen::Isometry3d T_tool_to_cube_{Eigen::Isometry3d::Identity()};
