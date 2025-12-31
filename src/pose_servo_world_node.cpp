@@ -14,6 +14,7 @@
 
 #include <string>
 #include <boost/optional.hpp>
+#include <sstream>
 
 namespace
 {
@@ -101,24 +102,79 @@ boost::optional<CalibData> loadCalib(const std::string &path)
 {
   try
   {
+    ROS_INFO("[Calib] loading calib yaml: %s", path.c_str());
     YAML::Node root = YAML::LoadFile(path);
+    auto rootKeysStr = [&root]() {
+      std::stringstream ss;
+      bool first = true;
+      for (const auto &kv : root)
+      {
+        if (!first)
+        {
+          ss << ", ";
+        }
+        first = false;
+        ss << kv.first.as<std::string>();
+      }
+      return ss.str();
+    };
     CalibData out;
-    if (!root["world_robot_extrinsic_offline"])
+
+    YAML::Node node_wb;
+    std::string branch_used;
+    std::vector<std::string> quat_keys;
+    if (root["world_robot_extrinsic_offline"])
     {
-      ROS_ERROR("calib yaml missing world_robot_extrinsic_offline");
+      node_wb = root["world_robot_extrinsic_offline"];
+      branch_used = "world_robot_extrinsic_offline";
+      quat_keys = {"quat_xyzw", "rotation_xyzw"};
+    }
+    else if (root["extrinsic"])
+    {
+      node_wb = root["extrinsic"];
+      branch_used = "extrinsic";
+      quat_keys = {"rotation_xyzw", "quat_xyzw"};
+    }
+    else
+    {
+      ROS_ERROR("calib yaml missing world_robot_extrinsic_offline/extrinsic; root keys: %s", rootKeysStr().c_str());
       return boost::none;
     }
-    const auto &wre = root["world_robot_extrinsic_offline"];
-    if (!wre["translation"] || !wre["quat_xyzw"])
+    ROS_INFO("[Calib] using %s branch for T_world_base", branch_used.c_str());
+
+    if (!node_wb["translation"])
     {
-      ROS_ERROR("calib yaml missing translation/quat_xyzw");
+      ROS_ERROR("calib yaml missing %s.translation; root keys: %s", branch_used.c_str(), rootKeysStr().c_str());
       return boost::none;
     }
-    std::vector<double> t = wre["translation"].as<std::vector<double>>();
-    std::vector<double> q = wre["quat_xyzw"].as<std::vector<double>>();
-    if (t.size() != 3 || q.size() != 4)
+    std::vector<double> t = node_wb["translation"].as<std::vector<double>>();
+    if (t.size() != 3)
     {
-      ROS_ERROR("calib yaml malformed translation/quat");
+      ROS_ERROR("calib yaml %s.translation length=%zu expected=3", branch_used.c_str(), t.size());
+      ROS_ERROR("root keys: %s", rootKeysStr().c_str());
+      return boost::none;
+    }
+    std::vector<double> q;
+    std::string q_key_used;
+    for (const auto &k : quat_keys)
+    {
+      if (node_wb[k])
+      {
+        q = node_wb[k].as<std::vector<double>>();
+        q_key_used = k;
+        break;
+      }
+    }
+    if (q_key_used.empty())
+    {
+      ROS_ERROR("calib yaml missing quaternion (%s)", branch_used.c_str());
+      ROS_ERROR("root keys: %s", rootKeysStr().c_str());
+      return boost::none;
+    }
+    if (q.size() != 4)
+    {
+      ROS_ERROR("calib yaml %s.%s length=%zu expected=4", branch_used.c_str(), q_key_used.c_str(), q.size());
+      ROS_ERROR("root keys: %s", rootKeysStr().c_str());
       return boost::none;
     }
     Eigen::Isometry3d T_wb = Eigen::Isometry3d::Identity();
@@ -128,19 +184,46 @@ boost::optional<CalibData> loadCalib(const std::string &path)
     T_wb.linear() = q_wb.toRotationMatrix();
     out.T_world_base = T_wb;
 
-    if (wre["tool_extrinsic_tool_to_cube"])
+    YAML::Node node_tc;
+    std::string tool_source;
+    if (root["tool_extrinsic_tool_to_cube"])
     {
-      const auto &tool = wre["tool_extrinsic_tool_to_cube"];
+      node_tc = root["tool_extrinsic_tool_to_cube"];
+      tool_source = "root";
+    }
+    else if (node_wb["tool_extrinsic_tool_to_cube"])
+    {
+      node_tc = node_wb["tool_extrinsic_tool_to_cube"];
+      tool_source = branch_used;
+    }
+
+    if (node_tc)
+    {
+      ROS_INFO("[Calib] tool_extrinsic_tool_to_cube found at %s level", tool_source.c_str());
       std::vector<double> t_tc;
       std::vector<double> q_tc;
-      if (tool["translation_final_m"])
-        t_tc = tool["translation_final_m"].as<std::vector<double>>();
-      else if (tool["translation_init_m"])
-        t_tc = tool["translation_init_m"].as<std::vector<double>>();
-      if (tool["rotation_final_xyzw"])
-        q_tc = tool["rotation_final_xyzw"].as<std::vector<double>>();
-      else if (tool["rotation_init_xyzw"])
-        q_tc = tool["rotation_init_xyzw"].as<std::vector<double>>();
+      std::string t_key_used;
+      std::string q_key_used_tc;
+      if (node_tc["translation_final_m"])
+      {
+        t_tc = node_tc["translation_final_m"].as<std::vector<double>>();
+        t_key_used = "translation_final_m";
+      }
+      else if (node_tc["translation_init_m"])
+      {
+        t_tc = node_tc["translation_init_m"].as<std::vector<double>>();
+        t_key_used = "translation_init_m";
+      }
+      if (node_tc["rotation_final_xyzw"])
+      {
+        q_tc = node_tc["rotation_final_xyzw"].as<std::vector<double>>();
+        q_key_used_tc = "rotation_final_xyzw";
+      }
+      else if (node_tc["rotation_init_xyzw"])
+      {
+        q_tc = node_tc["rotation_init_xyzw"].as<std::vector<double>>();
+        q_key_used_tc = "rotation_init_xyzw";
+      }
       if (t_tc.size() == 3 && q_tc.size() == 4)
       {
         Eigen::Isometry3d T_tc = Eigen::Isometry3d::Identity();
@@ -152,12 +235,13 @@ boost::optional<CalibData> loadCalib(const std::string &path)
       }
       else
       {
-        ROS_WARN("tool_extrinsic_tool_to_cube missing or malformed, using identity");
+        ROS_WARN("tool_extrinsic_tool_to_cube malformed (t_key=%s len=%zu expected=3, q_key=%s len=%zu expected=4), using identity",
+                 t_key_used.c_str(), t_tc.size(), q_key_used_tc.c_str(), q_tc.size());
       }
     }
     else
     {
-      ROS_WARN("tool_extrinsic_tool_to_cube not found, using identity");
+      ROS_WARN("tool_extrinsic_tool_to_cube not found at root or %s level, using identity", branch_used.c_str());
     }
     return out;
   }
