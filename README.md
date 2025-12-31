@@ -127,29 +127,30 @@ source devel/setup.bash
 roscore  # 如未运行，请先启动
 ```
 
-### (1) 启动多臂（可只启/只连部分机械臂）
-- 只启 jaka2+jaka4，并允许连接机器人（待目标才运动）  
+### (1) 启动多臂或单臂（统一入口：multi_arm_closed_loop.launch）
+- 示例 1：仅启 jaka1+jaka2，允许连接机器人（需要 set_target 才会运动）  
   ```bash
-  roslaunch jaka_close_contro multi_arm_pose_servo_world.launch \
+  roslaunch jaka_close_contro multi_arm_closed_loop.launch \
     enable_jaka1:=true enable_jaka2:=true enable_jaka3:=false enable_jaka4:=false \
-    connect_jaka2:=true connect_jaka1:=true
+    connect_jaka1:=true connect_jaka2:=true
   ```
-- 只启 jaka2+jaka4，但禁止连接机器人（绝对不运动，调试视觉/状态）  
+- 示例 2：仅启 jaka2（单臂用法），且不连接机器人（绝对不运动，验证视觉与状态）  
   ```bash
-  roslaunch jaka_close_contro multi_arm_pose_servo_world.launch \
-    enable_jaka1:=false enable_jaka2:=true enable_jaka3:=false enable_jaka4:=true \
-    connect_jaka2:=false connect_jaka4:=false
+  roslaunch jaka_close_contro multi_arm_closed_loop.launch \
+    enable_jaka1:=false enable_jaka2:=true enable_jaka3:=false enable_jaka4:=false \
+    connect_jaka2:=false
   ```
 - 四臂都启用，但只连接 jaka1+jaka2（其余 DISCONNECTED、不影响）  
   ```bash
-  roslaunch jaka_close_contro multi_arm_pose_servo_world.launch \
+  roslaunch jaka_close_contro multi_arm_closed_loop.launch \
     enable_jaka1:=true enable_jaka2:=true enable_jaka3:=true enable_jaka4:=true \
     connect_jaka1:=true connect_jaka2:=true connect_jaka3:=false connect_jaka4:=false
   ```
+- 单臂启动即为“仅 enable 一个机器人 + multi_arm_closed_loop.launch”，无需其他 launch。  
 - 常用参数覆盖：  
-  - 每臂 `calib_yaml`：`calib_yaml:=/abs/path/to/world_robot_extrinsic_offline_jaka2.yaml`  
-  - 每臂 `cube_pose_topic`：`cube_pose_topic:=/custom/jaka2/world_cube`  
-  - 控制/阈值：`kp_pos`/`kp_ang`/`v_max`/`w_max_deg`/`eps_pos_m`/`eps_ang_deg` 等 rosparam，可在 launch 覆盖。
+  - 每臂 `calib_yaml`：`calib_yaml_jakaX:=/abs/path/to/world_robot_extrinsic_offline_jakaX.yaml`  
+  - 每臂 `cube_pose_topic`：`cube_pose_topic_jakaX:=/custom/jakaX/world_cube`  
+  - 控制/阈值：`kp_pos`/`kp_ang`/`v_max`/`w_max_deg`/`eps_pos_m`/`eps_ang_deg` 等 rosparam，可在 launch 覆盖。  
 - 前提：不设置目标则不会运动；若想确保绝对不动，使用 `connect_jakaX:=false`。
 
 ### (2) 发送目标（world 下 tool/link6 位姿）

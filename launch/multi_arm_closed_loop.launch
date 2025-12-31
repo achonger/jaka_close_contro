@@ -10,6 +10,17 @@
   <arg name="connect_jaka3" default="true" />
   <arg name="connect_jaka4" default="true" />
 
+  <!-- Per-arm calibration and input topics -->
+  <arg name="calib_yaml_jaka1" default="$(find jaka_close_contro)/config/world_robot_extrinsic_offline_jaka1.yaml" />
+  <arg name="calib_yaml_jaka2" default="$(find jaka_close_contro)/config/world_robot_extrinsic_offline_jaka2.yaml" />
+  <arg name="calib_yaml_jaka3" default="$(find jaka_close_contro)/config/world_robot_extrinsic_offline_jaka3.yaml" />
+  <arg name="calib_yaml_jaka4" default="$(find jaka_close_contro)/config/world_robot_extrinsic_offline_jaka4.yaml" />
+
+  <arg name="cube_pose_topic_jaka1" default="/vision/jaka1/cube_center_world" />
+  <arg name="cube_pose_topic_jaka2" default="/vision/jaka2/cube_center_world" />
+  <arg name="cube_pose_topic_jaka3" default="/vision/jaka3/cube_center_world" />
+  <arg name="cube_pose_topic_jaka4" default="/vision/jaka4/cube_center_world" />
+
   <!-- Vision pipeline toggle -->
   <arg name="start_vision" default="true" />
 
@@ -276,8 +287,8 @@
       <param name="robot_id" value="1" />
       <param name="enable" value="$(arg enable_jaka1)" />
       <param name="connect_robot" value="$(arg connect_jaka1)" />
-      <param name="calib_yaml" value="$(find jaka_close_contro)/config/world_robot_extrinsic_offline_jaka1.yaml" />
-      <param name="cube_pose_topic" value="/vision/jaka1/cube_center_world" />
+      <param name="calib_yaml" value="$(arg calib_yaml_jaka1)" />
+      <param name="cube_pose_topic" value="$(arg cube_pose_topic_jaka1)" />
       <param name="target_topic" value="target_tool_world" />
       <param name="control_rate_hz" value="$(arg control_rate_hz)" />
       <param name="kp_pos" value="$(arg kp_pos)" />
@@ -299,8 +310,8 @@
       <param name="robot_id" value="2" />
       <param name="enable" value="$(arg enable_jaka2)" />
       <param name="connect_robot" value="$(arg connect_jaka2)" />
-      <param name="calib_yaml" value="$(find jaka_close_contro)/config/world_robot_extrinsic_offline_jaka2.yaml" />
-      <param name="cube_pose_topic" value="/vision/jaka2/cube_center_world" />
+      <param name="calib_yaml" value="$(arg calib_yaml_jaka2)" />
+      <param name="cube_pose_topic" value="$(arg cube_pose_topic_jaka2)" />
       <param name="target_topic" value="target_tool_world" />
       <param name="control_rate_hz" value="$(arg control_rate_hz)" />
       <param name="kp_pos" value="$(arg kp_pos)" />
@@ -322,8 +333,8 @@
       <param name="robot_id" value="3" />
       <param name="enable" value="$(arg enable_jaka3)" />
       <param name="connect_robot" value="$(arg connect_jaka3)" />
-      <param name="calib_yaml" value="$(find jaka_close_contro)/config/world_robot_extrinsic_offline_jaka3.yaml" />
-      <param name="cube_pose_topic" value="/vision/jaka3/cube_center_world" />
+      <param name="calib_yaml" value="$(arg calib_yaml_jaka3)" />
+      <param name="cube_pose_topic" value="$(arg cube_pose_topic_jaka3)" />
       <param name="target_topic" value="target_tool_world" />
       <param name="control_rate_hz" value="$(arg control_rate_hz)" />
       <param name="kp_pos" value="$(arg kp_pos)" />
@@ -345,8 +356,8 @@
       <param name="robot_id" value="4" />
       <param name="enable" value="$(arg enable_jaka4)" />
       <param name="connect_robot" value="$(arg connect_jaka4)" />
-      <param name="calib_yaml" value="$(find jaka_close_contro)/config/world_robot_extrinsic_offline_jaka4.yaml" />
-      <param name="cube_pose_topic" value="/vision/jaka4/cube_center_world" />
+      <param name="calib_yaml" value="$(arg calib_yaml_jaka4)" />
+      <param name="cube_pose_topic" value="$(arg cube_pose_topic_jaka4)" />
       <param name="target_topic" value="target_tool_world" />
       <param name="control_rate_hz" value="$(arg control_rate_hz)" />
       <param name="kp_pos" value="$(arg kp_pos)" />
