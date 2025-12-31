@@ -167,6 +167,24 @@ roscore  # 如未运行，请先启动
   rosservice call /jaka4/pose_servo_world/set_target "{target: {header: {frame_id: 'world'}, pose: {position: {x: 0.25, y: -0.05, z: 0.33}, orientation: {x: 0.0, y: 0.0, z: 0.7071, w: 0.7071}}}}"
   ```
 
+### 多臂闭环专用 bringup（推荐）
+- 启动示例（两台）：  
+  ```bash
+  roslaunch jaka_close_contro multi_arm_closed_loop.launch \
+    enable_jaka1:=true enable_jaka2:=true enable_jaka3:=false enable_jaka4:=false \
+    connect_jaka1:=true connect_jaka2:=true \
+    start_vision:=true \
+    jaka1_ip:=192.168.1.100 jaka2_ip:=192.168.1.101
+  ```
+- 验证各自 namespace 下的 IP 参数：  
+  ```bash
+  rosparam get /jaka1/ip
+  rosparam get /jaka2/ip
+  ```
+  期望输出分别为 `192.168.1.100`、`192.168.1.101`（示例）。  
+- 查看 driver 连接日志：启动时应看到 `try to connect: <IP>`，且 jaka1/jaka2 分别使用自己的 IP，不会互相覆盖。  
+- 说明：`jaka_sdk_bringup_multi.launch` 在各自 namespace 下设置 `/jakaX/ip` 并给 driver 提供私有 `~ip`/`~robot_ip`，避免使用全局 `/ip` 造成多臂冲突。
+
 ### (3) 停止 / 清除目标
 - stop：立即进入 HOLD/停止更新命令  
   ```bash

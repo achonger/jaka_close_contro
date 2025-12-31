@@ -52,30 +52,30 @@
 
   <!-- 0. Robot drivers (namespaced) -->
   <group ns="jaka1" if="$(arg enable_jaka1)">
-    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
-      <arg name="ip" value="$(arg jaka1_ip)" />
-      <arg name="urdf_file" value="$(arg urdf_file)" />
+    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup_multi.launch">
+      <arg name="robot_ns" value="jaka1" />
+      <arg name="robot_ip" value="$(arg jaka1_ip)" />
     </include>
   </group>
 
   <group ns="jaka2" if="$(arg enable_jaka2)">
-    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
-      <arg name="ip" value="$(arg jaka2_ip)" />
-      <arg name="urdf_file" value="$(arg urdf_file)" />
+    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup_multi.launch">
+      <arg name="robot_ns" value="jaka2" />
+      <arg name="robot_ip" value="$(arg jaka2_ip)" />
     </include>
   </group>
 
   <group ns="jaka3" if="$(arg enable_jaka3)">
-    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
-      <arg name="ip" value="$(arg jaka3_ip)" />
-      <arg name="urdf_file" value="$(arg urdf_file)" />
+    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup_multi.launch">
+      <arg name="robot_ns" value="jaka3" />
+      <arg name="robot_ip" value="$(arg jaka3_ip)" />
     </include>
   </group>
 
   <group ns="jaka4" if="$(arg enable_jaka4)">
-    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
-      <arg name="ip" value="$(arg jaka4_ip)" />
-      <arg name="urdf_file" value="$(arg urdf_file)" />
+    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup_multi.launch">
+      <arg name="robot_ns" value="jaka4" />
+      <arg name="robot_ip" value="$(arg jaka4_ip)" />
     </include>
   </group>
 
