@@ -131,8 +131,8 @@ roscore  # 如未运行，请先启动
 - 只启 jaka2+jaka4，并允许连接机器人（待目标才运动）  
   ```bash
   roslaunch jaka_close_contro multi_arm_pose_servo_world.launch \
-    enable_jaka1:=false enable_jaka2:=true enable_jaka3:=false enable_jaka4:=true \
-    connect_jaka2:=true connect_jaka4:=true
+    enable_jaka1:=true enable_jaka2:=true enable_jaka3:=false enable_jaka4:=false \
+    connect_jaka2:=true connect_jaka1:=true
   ```
 - 只启 jaka2+jaka4，但禁止连接机器人（绝对不运动，调试视觉/状态）  
   ```bash

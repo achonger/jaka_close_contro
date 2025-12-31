@@ -1,0 +1,82 @@
+# Offline calibration result
+# CALIB_MODE: world_base
+# TARGET: X = T_world_base
+# MEAS: A = T_world_cube
+# model: A ≈ X * (B_base_tool) * (Y_tool_to_cube)
+# source_csv: /home/zxy/catkin_ws/src/jaka_close_contro/config/world_robot_calib_dataset_jaka2_1767066328.csv
+# num_samples_total: 16
+# num_samples_used: 16
+# weight_mode: robust
+# opt_tool_extrinsic: 1
+# tool_extrinsic (Link_6 -> cube_center):
+#   translation_init[m]: [0.0, 0.0, 0.064]
+#   rotation_init(qx,qy,qz,qw): [0.0, 0.0, 0.0, 1.0]
+#   translation_final[m]: [0.0011746859796857637, -8.276656517812786e-05, 0.06401774584238648]
+#   rotation_final(qx,qy,qz,qw): [-0.002367521638964265, 0.0021972870878066604, 0.00020829487370336796, 0.9999947616782742]
+#   prior_max_delta_trans[m]: 0.01
+#   prior_max_delta_rot[deg]: 10.0
+#   delta_trans_norm[m]: 0.0011777318753025637
+#   delta_rot_norm[deg]: 0.3709060348746134
+# residual_stats (prediction X*B*Y vs measurement A):
+#   pos_err[m]: mean=1.795700e-03, std=8.759162e-04, min=5.422897e-04, max=3.365787e-03, rmse=1.997941e-03
+#   ang_err[deg]: mean=3.424703e-01, std=1.701959e-01, min=1.189110e-01, max=6.819818e-01, rmse=3.824298e-01
+#mode: world_base
+extrinsic:
+  parent: world
+  child: Link_0
+  robot_name: jaka2
+  robot_id: 2
+  method: Xi = world_cube * inv(base_tool * tool_to_cube), then avg(t) + Markley avg(q)
+  source_csv: /home/zxy/catkin_ws/src/jaka_close_contro/config/world_robot_calib_dataset_jaka2_1767066328.csv
+  samples_total: 16
+  samples_used: 16
+  translation:
+  - 0.4400942120854756
+  - -0.4386333049822788
+  - 0.087781357662159
+  rotation_xyzw:
+  - -0.6648783837759275
+  - 0.271377741944396
+  - 0.23997684805853442
+  - 0.6532242864136042
+tool_extrinsic_tool_to_cube:
+  tool_frame: Link_6
+  cube_frame: cube_center_jaka2
+  opt_enabled: 1
+  translation_init_m:
+  - 0.0
+  - 0.0
+  - 0.064
+  rotation_init_xyzw:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+  translation_final_m:
+  - 0.0011746859796857637
+  - -8.276656517812786e-05
+  - 0.06401774584238648
+  rotation_final_xyzw:
+  - -0.002367521638964265
+  - 0.0021972870878066604
+  - 0.00020829487370336796
+  - 0.9999947616782742
+  prior_max_delta_trans_m: 0.01
+  prior_max_delta_rot_deg: 10.0
+  delta_trans_norm_m: 0.0011777318753025637
+  delta_rot_norm_deg: 0.3709060348746134
+  opt_iters: 10
+  opt_alpha: 0.5
+residual_stats:
+  pos_err_m:
+    mean: 0.0017957003475415126
+    std: 0.0008759162310203368
+    min: 0.0005422897344106345
+    max: 0.0033657867308415634
+    rmse: 0.0019979411858024204
+  ang_err_deg:
+    mean: 0.3424703112117601
+    std: 0.17019591337456128
+    min: 0.1189109944772656
+    max: 0.6819818027490341
+    rmse: 0.38242981446388435
