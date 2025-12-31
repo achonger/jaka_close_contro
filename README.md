@@ -199,6 +199,55 @@ roscore  # 如未运行，请先启动
   ```bash
   rosrun jaka_close_contro get_cube_pose_world.py --robot jaka2
   ```
+
+## 一键闭环（视觉链路 + 多臂驱动 + TF->Pose 桥 + 闭环控制）
+
+> 适用于一次性启动相机、ArUco 棱方体检测、world tag、每臂多面融合、TF→Pose 桥接、驱动以及多臂闭环控制。默认启动视觉链路，可通过 `start_vision:=false` 关闭（用于已单独启动视觉时）。
+
+### (0) 编译与环境
+```bash
+cd ~/catkin_ws
+catkin build
+source devel/setup.bash
+roscore
+```
+
+### (1) 一键启动
+```bash
+roslaunch jaka_close_contro multi_arm_closed_loop.launch \
+  enable_jaka1:=true enable_jaka2:=true enable_jaka3:=false enable_jaka4:=false \
+  connect_jaka1:=true connect_jaka2:=true \
+  start_vision:=true
+```
+
+- 关键参数  
+  - `start_vision`（默认 `true`）：是否启动相机 + 棱方体检测 + relay + world tag + 多面融合。  
+  - `robot_ids`：传递给检测/relay，用于生成 face_id；默认 `[1,2,3,4]`。  
+  - `world_frame` / `camera_frame`：视觉链路与 TF→Pose 桥接使用的坐标系。  
+  - 每臂 IP：`jaka1_ip`~`jaka4_ip`（默认 192.168.1.100/101/102/103）。  
+  - `strict_cube_frame`：闭环节点是否只接受 `world_frame` 的 Pose（默认 `true`）。  
+  - 驱动 URDF：`urdf_file`。  
+  - 控制参数：`control_rate_hz`、`kp_pos`、`kp_ang`、`v_max`、`w_max_deg`、`eps_pos_m`、`eps_ang_deg`、`vision_timeout_s`、`servo_timeout_s`。  
+  - 闭环订阅：`/vision/jakaX/cube_center_world`（由 TF→Pose 桥接节点发布，强制填充时间戳）。  
+  - 驱动服务名：默认相对名 `jaka_driver/linear_move`，在 namespace 下自动变为 `/jakaX/jaka_driver/linear_move`，避免多臂冲突。
+
+### (2) 验证视觉输出与闭环输入
+```bash
+rostopic info /vision/jaka1/cube_center_world | grep Publishers
+rostopic info /vision/jaka2/cube_center_world | grep Publishers
+```
+应看到非 None 的 Publisher（来自 `tf_to_pose_stamped_node`）。
+
+### (3) 查询闭环输入状态
+```bash
+rosservice call /jaka1/pose_servo_world/get_cube_pose_world "{}"
+rosservice call /jaka2/pose_servo_world/get_cube_pose_world "{}"
+```
+- 正常输出 `ok: True`，`age_sec` 为正数且小于 `vision_timeout_s`，`pose.header.frame_id=world` 且 `stamp` 非零（无 `/clock` 时使用 wall time 计算超时）。
+
+### (4) 命名空间与驱动隔离
+- 驱动服务路径为 `/jakaX/jaka_driver/linear_move`，两臂不会冲突。  
+- 闭环节点自动在各自 namespace 下工作（`cube_pose_topic`、service、status/err 话题均带 `jakaX/` 前缀）。
 - 返回字段：`ok` / `message` / `pose`（PoseStamped，frame_id=world）/ `age_sec`（当前时间与 pose 时间差，s）。若未收到或超时则 `ok=false` 并给出提示。
 
 ### (6) 安全与注意事项
