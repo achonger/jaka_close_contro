@@ -15,6 +15,7 @@
 #include <string>
 #include <boost/optional.hpp>
 #include <sstream>
+#include <mutex>
 
 namespace
 {
@@ -276,6 +277,13 @@ public:
     pnh_.param<std::string>("linear_move_service", linear_move_service_, std::string("jaka_driver/linear_move"));
     pnh_.param<std::string>("world_frame", world_frame_, std::string("world"));
     pnh_.param<bool>("strict_cube_frame", strict_cube_frame_, true);
+    pnh_.param<std::string>("joint_state_topic", joint_state_topic_, std::string("joint_states"));
+    pnh_.param<double>("motion_joint_threshold_rad", motion_joint_threshold_rad_, 0.002);
+    pnh_.param<double>("motion_stable_duration_sec", motion_stable_duration_sec_, 0.5);
+    pnh_.param<double>("motion_done_timeout_sec", motion_done_timeout_sec_, 5.0);
+    pnh_.param<double>("settle_after_motion_sec", settle_after_motion_sec_, 0.1);
+    pnh_.param<double>("send_rate_hz", send_rate_hz_, 5.0);
+    pnh_.param<double>("resume_factor", resume_factor_, 2.0);
     pnh_.param<std::string>("cube_pose_topic", cube_pose_topic_,
                             std::string("/vision/" + robot_name_ + "/cube_center_world"));
     pnh_.param<std::string>("target_topic", target_topic_, std::string("target_tool_world"));
@@ -320,6 +328,7 @@ public:
 
     cube_sub_ = nh_.subscribe(cube_pose_topic_, 1, &PoseServoWorld::cubeCb, this);
     target_sub_ = pnh_.subscribe(target_topic_, 1, &PoseServoWorld::targetCb, this);
+    joint_sub_ = nh_.subscribe(joint_state_topic_, 1, &PoseServoWorld::jointCb, this);
     status_pub_ = pnh_.advertise<std_msgs::String>("status", 1, true);
     err_pub_ = pnh_.advertise<geometry_msgs::Twist>("err", 1, true);
 
@@ -330,13 +339,15 @@ public:
 
     linear_move_client_ = nh_.serviceClient<jaka_msgs::Move>(linear_move_service_);
 
-    control_timer_ = nh_.createTimer(ros::Duration(1.0 / control_rate_hz_), &PoseServoWorld::controlTimer, this);
+    update_timer_ = nh_.createTimer(ros::Duration(1.0 / control_rate_hz_), &PoseServoWorld::updateTimer, this);
+    send_timer_ = nh_.createTimer(ros::Duration(1.0 / send_rate_hz_), &PoseServoWorld::sendTimer, this);
   }
 
 private:
   enum class State
   {
     IDLE,
+    MOVING,
     RUN,
     HOLD,
     DISCONNECTED
@@ -371,6 +382,35 @@ private:
     }
   }
 
+  void jointCb(const sensor_msgs::JointState::ConstPtr &msg)
+  {
+    std::lock_guard<std::mutex> lock(joint_mutex_);
+    if (msg->position.size() < 6)
+    {
+      ROS_WARN_THROTTLE(5.0, "[PoseServo] joint_state position size < 6");
+      return;
+    }
+    if (!has_prev_joint_)
+    {
+      prev_joint_pos_ = msg->position;
+      has_prev_joint_ = true;
+      last_motion_time_ = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
+    }
+    double max_diff = 0.0;
+    for (size_t i = 0; i < 6; ++i)
+    {
+      max_diff = std::max(max_diff, std::abs(msg->position[i] - prev_joint_pos_[i]));
+    }
+    if (max_diff > motion_joint_threshold_rad_)
+    {
+      last_motion_time_ = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
+      motion_stable_start_ = ros::Time(0);
+    }
+    prev_joint_pos_ = msg->position;
+    last_joint_stamp_ = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
+    have_joint_state_ = true;
+  }
+
   void targetCb(const geometry_msgs::PoseStamped::ConstPtr &msg)
   {
     if (msg->header.frame_id != world_frame_)
@@ -382,6 +422,7 @@ private:
     target_tool_world_ = *msg;
     target_active_ = true;
     target_start_time_ = ros::Time::now();
+    goal_reached_ = false;
     state_ = State::RUN;
   }
 
@@ -401,6 +442,7 @@ private:
     }
     target_active_ = true;
     target_start_time_ = ros::Time::now();
+    goal_reached_ = false;
     state_ = State::RUN;
     res.ok = true;
     res.message = "target accepted";
@@ -418,6 +460,7 @@ private:
   {
     target_active_ = false;
     state_ = State::IDLE;
+    goal_reached_ = false;
     return true;
   }
 
@@ -472,6 +515,8 @@ private:
     {
     case State::IDLE:
       return "IDLE";
+    case State::MOVING:
+      return "MOVING";
     case State::RUN:
       return "RUN";
     case State::HOLD:
@@ -480,6 +525,33 @@ private:
       return "DISCONNECTED";
     }
     return "UNKNOWN";
+  }
+
+  bool motionStable(const ros::Time &now)
+  {
+    if (!have_joint_state_)
+      return false;
+    if (last_motion_time_.isZero())
+      return false;
+    double since_move = (now - last_motion_time_).toSec();
+    if (since_move < motion_stable_duration_sec_)
+    {
+      motion_stable_start_ = ros::Time(0);
+      return false;
+    }
+    if (motion_stable_start_.isZero())
+    {
+      motion_stable_start_ = now;
+      return false;
+    }
+    return (now - motion_stable_start_).toSec() >= settle_after_motion_sec_;
+  }
+
+  bool motionTimedOut(const ros::Time &now) const
+  {
+    if (last_command_sent_time_.isZero())
+      return false;
+    return (now - last_command_sent_time_).toSec() > motion_done_timeout_sec_;
   }
 
   bool computeCubeAgeSec(double &age_out) const
@@ -515,12 +587,6 @@ private:
     }
     if (!linear_move_client_.exists())
     {
-      ROS_WARN_THROTTLE(1.0, "[PoseServo] robot driver not available; entering DISCONNECTED");
-      state_ = State::DISCONNECTED;
-      return false;
-    }
-    if (!linear_move_client_.exists())
-    {
       linear_move_client_.waitForExistence(ros::Duration(0.1));
     }
     Eigen::Quaterniond q(T_base_tool.rotation());
@@ -547,26 +613,23 @@ private:
     if (!linear_move_client_.call(srv))
     {
       ROS_WARN_THROTTLE(1.0, "[PoseServo] linear_move call failed");
-      state_ = State::DISCONNECTED;
       return false;
     }
     if (srv.response.ret != 0)
     {
       ROS_WARN_THROTTLE(1.0, "[PoseServo] linear_move ret=%d message=%s", srv.response.ret,
                         srv.response.message.c_str());
-      state_ = State::DISCONNECTED;
       return false;
     }
-    state_ = State::RUN;
     return true;
   }
 
-  void controlTimer(const ros::TimerEvent &)
+  void updateTimer(const ros::TimerEvent &)
   {
     double cube_age = 0.0;
     if (visionTimedOut(cube_age))
     {
-      if (state_ == State::RUN)
+      if (state_ == State::RUN || state_ == State::MOVING)
       {
         state_ = State::HOLD;
         ROS_WARN_THROTTLE(1.0, "[PoseServo] vision timeout, holding commands");
@@ -593,8 +656,95 @@ private:
       return;
     }
 
-    Eigen::Isometry3d T_world_cube_est = poseMsgToIso(last_cube_pose_.pose);
-    Eigen::Isometry3d T_world_tool_des = poseMsgToIso(target_tool_world_.pose);
+    latest_T_world_cube_est_ = poseMsgToIso(last_cube_pose_.pose);
+    latest_T_world_tool_des_ = poseMsgToIso(target_tool_world_.pose);
+
+    Eigen::Isometry3d T_world_cube_des = latest_T_world_tool_des_ * T_tool_to_cube_;
+    Eigen::Matrix<double, 6, 1> xi = computeError(latest_T_world_cube_est_, T_world_cube_des);
+    latest_ep_ = xi.head<3>();
+    latest_etheta_ = xi.tail<3>();
+
+    double ep_norm = latest_ep_.norm();
+    double etheta_norm = latest_etheta_.norm();
+
+    if (ep_norm < eps_pos_m_ && etheta_norm < eps_ang_rad_)
+    {
+      state_ = State::IDLE;
+      goal_reached_ = true;
+      publishStatus(latest_ep_, latest_etheta_, cube_age);
+      return;
+    }
+
+    if (state_ == State::IDLE && goal_reached_)
+    {
+      if (ep_norm > resume_factor_ * eps_pos_m_ || etheta_norm > resume_factor_ * eps_ang_rad_)
+      {
+        state_ = State::RUN;
+      }
+      publishStatus(latest_ep_, latest_etheta_, cube_age);
+      return;
+    }
+
+    publishStatus(latest_ep_, latest_etheta_, cube_age);
+  }
+
+  void sendTimer(const ros::TimerEvent &)
+  {
+    if (!target_active_ || !enable_ || state_ == State::HOLD || state_ == State::DISCONNECTED)
+    {
+      return;
+    }
+    if (!have_cube_pose_)
+    {
+      return;
+    }
+
+    ros::Time now = ros::Time::now();
+    if ((now - target_start_time_).toSec() > servo_timeout_s_)
+    {
+      ROS_WARN_THROTTLE(1.0, "[PoseServo] servo timeout, holding");
+      state_ = State::HOLD;
+      return;
+    }
+
+    if (state_ == State::MOVING)
+    {
+      if (motionTimedOut(now))
+      {
+        ROS_WARN("[PoseServo] motion timeout, holding");
+        state_ = State::HOLD;
+        return;
+      }
+      if (!motionStable(now))
+      {
+        ROS_DEBUG_THROTTLE(2.0, "[PoseServo] waiting for motion to settle");
+        return;
+      }
+      state_ = State::RUN;
+      ROS_INFO("[PoseServo] motion settled, ready for next command");
+    }
+
+    if (state_ == State::IDLE && goal_reached_)
+    {
+      double ep_norm = latest_ep_.norm();
+      double etheta_norm = latest_etheta_.norm();
+      if (ep_norm > resume_factor_ * eps_pos_m_ || etheta_norm > resume_factor_ * eps_ang_rad_)
+      {
+        state_ = State::RUN;
+      }
+      else
+      {
+        return;
+      }
+    }
+
+    if (state_ != State::RUN)
+    {
+      return;
+    }
+
+    Eigen::Isometry3d T_world_cube_est = latest_T_world_cube_est_;
+    Eigen::Isometry3d T_world_tool_des = latest_T_world_tool_des_;
 
     Eigen::Isometry3d T_world_cube_des = T_world_tool_des * T_tool_to_cube_;
     Eigen::Matrix<double, 6, 1> xi = computeError(T_world_cube_est, T_world_cube_des);
@@ -604,8 +754,7 @@ private:
     if (ep.norm() < eps_pos_m_ && etheta.norm() < eps_ang_rad_)
     {
       state_ = State::IDLE;
-      target_active_ = false;
-      publishStatus(ep, etheta, cube_age);
+      goal_reached_ = true;
       return;
     }
 
@@ -623,16 +772,34 @@ private:
     Eigen::Matrix<double, 6, 1> xi_cmd;
     xi_cmd.head<3>() = v_cmd;
     xi_cmd.tail<3>() = w_cmd;
-    double dt = 1.0 / control_rate_hz_;
-    Eigen::Isometry3d Delta = expSE3(xi_cmd * dt);
+    double dt_cmd = 1.0 / send_rate_hz_;
+    Eigen::Isometry3d Delta = expSE3(xi_cmd * dt_cmd);
     Eigen::Isometry3d T_world_cube_next = T_world_cube_est * Delta;
     Eigen::Isometry3d T_cube_to_tool = T_tool_to_cube_.inverse();
     Eigen::Isometry3d T_world_tool_next = T_world_cube_next * T_cube_to_tool;
     Eigen::Isometry3d T_base_tool_next = T_world_base_.inverse() * T_world_tool_next;
 
-    sendCommand(T_base_tool_next);
-    last_command_time_ = ros::Time::now();
-    publishStatus(ep, etheta, cube_age);
+    if (!linear_move_client_.exists())
+    {
+      ROS_WARN_THROTTLE(1.0, "[PoseServo] robot driver not available; entering DISCONNECTED");
+      state_ = State::DISCONNECTED;
+      return;
+    }
+
+    uint64_t cmd_seq = command_seq_++;
+    ROS_INFO("[PoseServo] cmd seq=%lu ep=%.4f etheta=%.4f dt=%.3f", cmd_seq, ep.norm(), etheta.norm(), dt_cmd);
+
+    bool ok = sendCommand(T_base_tool_next);
+    last_command_sent_time_ = now;
+    last_command_pose_ = T_base_tool_next;
+    if (!ok)
+    {
+      state_ = State::HOLD;
+      ROS_WARN("[PoseServo] linear_move failed, holding");
+      return;
+    }
+    state_ = State::MOVING;
+    goal_reached_ = false;
   }
 
   ros::NodeHandle nh_;
@@ -659,9 +826,11 @@ private:
   std::string target_topic_;
   std::string world_frame_{"world"};
   bool strict_cube_frame_{true};
+  std::string joint_state_topic_{"joint_states"};
 
   ros::Subscriber cube_sub_;
   ros::Subscriber target_sub_;
+  ros::Subscriber joint_sub_;
   ros::Publisher status_pub_;
   ros::Publisher err_pub_;
   ros::ServiceServer set_target_srv_;
@@ -669,20 +838,43 @@ private:
   ros::ServiceServer clear_target_srv_;
   ros::ServiceServer get_cube_pose_srv_;
   ros::ServiceClient linear_move_client_;
-  ros::Timer control_timer_;
+  ros::Timer update_timer_;
+  ros::Timer send_timer_;
 
   geometry_msgs::PoseStamped last_cube_pose_;
   geometry_msgs::PoseStamped target_tool_world_;
   bool target_active_{false};
   ros::Time target_start_time_;
-  ros::Time last_command_time_;
+  ros::Time last_command_sent_time_;
   bool have_cube_pose_{false};
   ros::WallTime last_cube_rx_wall_;
+  bool goal_reached_{false};
+  uint64_t command_seq_{0};
 
   Eigen::Isometry3d T_world_base_{Eigen::Isometry3d::Identity()};
   Eigen::Isometry3d T_tool_to_cube_{Eigen::Isometry3d::Identity()};
+  Eigen::Isometry3d last_command_pose_{Eigen::Isometry3d::Identity()};
+  Eigen::Isometry3d latest_T_world_cube_est_{Eigen::Isometry3d::Identity()};
+  Eigen::Isometry3d latest_T_world_tool_des_{Eigen::Isometry3d::Identity()};
+  Eigen::Vector3d latest_ep_{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d latest_etheta_{Eigen::Vector3d::Zero()};
 
   State state_{State::IDLE};
+
+  double motion_joint_threshold_rad_{0.002};
+  double motion_stable_duration_sec_{0.5};
+  double motion_done_timeout_sec_{5.0};
+  double settle_after_motion_sec_{0.1};
+  double send_rate_hz_{5.0};
+  double resume_factor_{2.0};
+
+  std::mutex joint_mutex_;
+  std::vector<double> prev_joint_pos_;
+  bool has_prev_joint_{false};
+  bool have_joint_state_{false};
+  ros::Time last_motion_time_;
+  ros::Time last_joint_stamp_;
+  ros::Time motion_stable_start_;
 };
 
 int main(int argc, char **argv)
