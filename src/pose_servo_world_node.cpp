@@ -8,6 +8,7 @@
 #include <ros/package.h>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+#include <sensor_msgs/JointState.h>
 #include <jaka_msgs/Move.h>
 #include <jaka_close_contro/SetPoseTarget.h>
 #include <jaka_close_contro/GetCubePoseWorld.h>
