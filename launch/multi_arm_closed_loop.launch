@@ -52,31 +52,99 @@
 
   <!-- 0. Robot drivers (namespaced) -->
   <group ns="jaka1" if="$(arg enable_jaka1)">
-    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup_multi.launch">
-      <arg name="robot_ns" value="jaka1" />
-      <arg name="robot_ip" value="$(arg jaka1_ip)" />
-    </include>
+    <param name="ip" value="$(arg jaka1_ip)" />
+    <param name="robot_description" textfile="$(arg urdf_file)" />
+
+    <node pkg="jaka_driver"
+          type="jaka_driver"
+          name="jaka_driver"
+          output="screen">
+      <param name="ip" value="$(arg jaka1_ip)" />
+      <param name="robot_ip" value="$(arg jaka1_ip)" />
+    </node>
+
+    <node pkg="jaka_close_contro"
+          type="jaka_state_adapter_node"
+          name="jaka_state_adapter"
+          output="screen" />
+
+    <node pkg="robot_state_publisher"
+          type="robot_state_publisher"
+          name="robot_state_publisher">
+      <param name="publish_frequency" value="100.0" />
+    </node>
   </group>
 
   <group ns="jaka2" if="$(arg enable_jaka2)">
-    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup_multi.launch">
-      <arg name="robot_ns" value="jaka2" />
-      <arg name="robot_ip" value="$(arg jaka2_ip)" />
-    </include>
+    <param name="ip" value="$(arg jaka2_ip)" />
+    <param name="robot_description" textfile="$(arg urdf_file)" />
+
+    <node pkg="jaka_driver"
+          type="jaka_driver"
+          name="jaka_driver"
+          output="screen">
+      <param name="ip" value="$(arg jaka2_ip)" />
+      <param name="robot_ip" value="$(arg jaka2_ip)" />
+    </node>
+
+    <node pkg="jaka_close_contro"
+          type="jaka_state_adapter_node"
+          name="jaka_state_adapter"
+          output="screen" />
+
+    <node pkg="robot_state_publisher"
+          type="robot_state_publisher"
+          name="robot_state_publisher">
+      <param name="publish_frequency" value="100.0" />
+    </node>
   </group>
 
   <group ns="jaka3" if="$(arg enable_jaka3)">
-    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup_multi.launch">
-      <arg name="robot_ns" value="jaka3" />
-      <arg name="robot_ip" value="$(arg jaka3_ip)" />
-    </include>
+    <param name="ip" value="$(arg jaka3_ip)" />
+    <param name="robot_description" textfile="$(arg urdf_file)" />
+
+    <node pkg="jaka_driver"
+          type="jaka_driver"
+          name="jaka_driver"
+          output="screen">
+      <param name="ip" value="$(arg jaka3_ip)" />
+      <param name="robot_ip" value="$(arg jaka3_ip)" />
+    </node>
+
+    <node pkg="jaka_close_contro"
+          type="jaka_state_adapter_node"
+          name="jaka_state_adapter"
+          output="screen" />
+
+    <node pkg="robot_state_publisher"
+          type="robot_state_publisher"
+          name="robot_state_publisher">
+      <param name="publish_frequency" value="100.0" />
+    </node>
   </group>
 
   <group ns="jaka4" if="$(arg enable_jaka4)">
-    <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup_multi.launch">
-      <arg name="robot_ns" value="jaka4" />
-      <arg name="robot_ip" value="$(arg jaka4_ip)" />
-    </include>
+    <param name="ip" value="$(arg jaka4_ip)" />
+    <param name="robot_description" textfile="$(arg urdf_file)" />
+
+    <node pkg="jaka_driver"
+          type="jaka_driver"
+          name="jaka_driver"
+          output="screen">
+      <param name="ip" value="$(arg jaka4_ip)" />
+      <param name="robot_ip" value="$(arg jaka4_ip)" />
+    </node>
+
+    <node pkg="jaka_close_contro"
+          type="jaka_state_adapter_node"
+          name="jaka_state_adapter"
+          output="screen" />
+
+    <node pkg="robot_state_publisher"
+          type="robot_state_publisher"
+          name="robot_state_publisher">
+      <param name="publish_frequency" value="100.0" />
+    </node>
   </group>
 
   <!-- 1. Vision pipeline -->

@@ -183,7 +183,7 @@ roscore  # 如未运行，请先启动
   ```
   期望输出分别为 `192.168.1.100`、`192.168.1.101`（示例）。  
 - 查看 driver 连接日志：启动时应看到 `try to connect: <IP>`，且 jaka1/jaka2 分别使用自己的 IP，不会互相覆盖。  
-- 说明：`jaka_sdk_bringup_multi.launch` 在各自 namespace 下设置 `/jakaX/ip` 并给 driver 提供私有 `~ip`/`~robot_ip`，避免使用全局 `/ip` 造成多臂冲突。
+- 说明：multi_arm_closed_loop.launch 已内联每台机械臂的 bringup， 在各自 namespace 下设置 `/jakaX/ip` 并给 driver 提供私有 `~ip`/`~robot_ip`，避免使用全局 `/ip` 造成多臂冲突。
 
 ### (3) 停止 / 清除目标
 - stop：立即进入 HOLD/停止更新命令  

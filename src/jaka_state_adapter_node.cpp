@@ -6,8 +6,8 @@ class JakaStateAdapter
 public:
   JakaStateAdapter(ros::NodeHandle& nh, ros::NodeHandle& pnh)
   {
-    pnh.param<std::string>("input_joint_topic", input_topic_, std::string("/jaka_driver/joint_position"));
-    pnh.param<std::string>("output_joint_topic", output_topic_, std::string("/joint_states"));
+    pnh.param<std::string>("input_joint_topic", input_topic_, std::string("jaka_driver/joint_position"));
+    pnh.param<std::string>("output_joint_topic", output_topic_, std::string("joint_states"));
 
     pub_ = nh.advertise<sensor_msgs::JointState>(output_topic_, 10);
     sub_ = nh.subscribe(input_topic_, 10, &JakaStateAdapter::jointCallback, this);

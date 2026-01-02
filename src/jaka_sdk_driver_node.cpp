@@ -18,11 +18,18 @@ public:
         : nh_(nh), nh_priv_("~"), running_(false)
     {
         // 1. 读取参数
-        nh_priv_.param<std::string>("robot_ip", robot_ip_, std::string("192.168.1.100"));
         nh_priv_.param<double>("status_hz", status_hz_, 50.0);
 
+        std::string ip_default = "192.168.1.100";
+        // Prefer namespace param "ip", then private "~ip", then "~robot_ip"
+        if (!nh_.getParam("ip", robot_ip_))
+        {
+            nh_priv_.param<std::string>("ip", robot_ip_, ip_default);
+        }
+        nh_priv_.param<std::string>("robot_ip", robot_ip_, robot_ip_);
+
         // 2. JointState publisher
-        joint_state_pub_ = nh_.advertise<sensor_msgs::JointState>("/joint_states", 10);
+        joint_state_pub_ = nh_.advertise<sensor_msgs::JointState>("joint_states", 10);
 
         // 3. 建立 SDK 连接（这里只做 login_in，不再自动 power_on / enable_robot）
         if (!connectRobot())
@@ -33,7 +40,7 @@ public:
         }
 
         // 4. joint_move service，名字沿用 /jaka_driver/joint_move，方便复用原来的代码/launch
-        joint_move_srv_ = nh_.advertiseService("/jaka_driver/joint_move",
+        joint_move_srv_ = nh_.advertiseService("jaka_driver/joint_move",
                                                &JakaSdkDriver::jointMoveCb, this);
 
         // 5. 启动状态发布线程
