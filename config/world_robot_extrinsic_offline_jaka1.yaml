@@ -3,7 +3,7 @@
 # TARGET: X = T_world_base
 # MEAS: A = T_world_cube
 # model: A ≈ X * (B_base_tool) * (Y_tool_to_cube)
-# source_csv: /home/zxy/catkin_ws/src/jaka_close_contro/config/world_robot_calib_dataset_jaka1_1767078470.csv
+# source_csv: /home/zxy/catkin_ws/src/jaka_close_contro/config/world_robot_calib_dataset_jaka1_1767344301.csv
 # num_samples_total: 16
 # num_samples_used: 16
 # weight_mode: robust
@@ -11,15 +11,15 @@
 # tool_extrinsic (Link_6 -> cube_center):
 #   translation_init[m]: [0.0, 0.0, 0.064]
 #   rotation_init(qx,qy,qz,qw): [0.0, 0.0, 0.0, 1.0]
-#   translation_final[m]: [0.0003636826329035615, 0.0007660833751470021, 0.06421774824187591]
-#   rotation_final(qx,qy,qz,qw): [-0.002573251392068998, 0.0011849446918555408, -0.0005810018670760293, 0.9999958183513473]
+#   translation_final[m]: [0.00046660034509888015, 0.0008903869676319294, 0.06406882638894633]
+#   rotation_final(qx,qy,qz,qw): [-0.0022841076379292538, 0.0011266869400045553, -0.0009211073400897982, 0.9999963324883275]
 #   prior_max_delta_trans[m]: 0.01
 #   prior_max_delta_rot[deg]: 10.0
-#   delta_trans_norm[m]: 0.0008755358884662236
-#   delta_rot_norm[deg]: 0.33139163921567316
+#   delta_trans_norm[m]: 0.001007592132755396
+#   delta_rot_norm[deg]: 0.31035125863095137
 # residual_stats (prediction X*B*Y vs measurement A):
-#   pos_err[m]: mean=1.375241e-03, std=6.707696e-04, min=3.316819e-04, max=2.809162e-03, rmse=1.530105e-03
-#   ang_err[deg]: mean=6.328380e-01, std=4.254711e-01, min=1.558727e-01, max=1.461523e+00, rmse=7.625678e-01
+#   pos_err[m]: mean=1.582927e-03, std=6.592083e-04, min=5.643729e-04, max=3.109738e-03, rmse=1.714705e-03
+#   ang_err[deg]: mean=6.828820e-01, std=5.348886e-01, min=1.803212e-01, max=2.372405e+00, rmse=8.674293e-01
 #mode: world_base
 extrinsic:
   parent: world
@@ -27,18 +27,18 @@ extrinsic:
   robot_name: jaka1
   robot_id: 1
   method: Xi = world_cube * inv(base_tool * tool_to_cube), then avg(t) + Markley avg(q)
-  source_csv: /home/zxy/catkin_ws/src/jaka_close_contro/config/world_robot_calib_dataset_jaka1_1767078470.csv
+  source_csv: /home/zxy/catkin_ws/src/jaka_close_contro/config/world_robot_calib_dataset_jaka1_1767344301.csv
   samples_total: 16
   samples_used: 16
   translation:
-  - -0.5047282559229447
-  - -0.4180835350818816
-  - 0.03968763490686412
+  - -0.5044008163394259
+  - -0.4168599180360309
+  - 0.039037177536148986
   rotation_xyzw:
-  - -0.2877027893213503
-  - 0.6592481967889982
-  - 0.632012710929815
-  - 0.2884074431603931
+  - -0.2868364524979853
+  - 0.6581520631348349
+  - 0.6333044758400462
+  - 0.2889397033823766
 tool_extrinsic_tool_to_cube:
   tool_frame: Link_6
   cube_frame: cube_center_jaka1
@@ -53,30 +53,30 @@ tool_extrinsic_tool_to_cube:
   - 0.0
   - 1.0
   translation_final_m:
-  - 0.0003636826329035615
-  - 0.0007660833751470021
-  - 0.06421774824187591
+  - 0.00046660034509888015
+  - 0.0008903869676319294
+  - 0.06406882638894633
   rotation_final_xyzw:
-  - -0.002573251392068998
-  - 0.0011849446918555408
-  - -0.0005810018670760293
-  - 0.9999958183513473
+  - -0.0022841076379292538
+  - 0.0011266869400045553
+  - -0.0009211073400897982
+  - 0.9999963324883275
   prior_max_delta_trans_m: 0.01
   prior_max_delta_rot_deg: 10.0
-  delta_trans_norm_m: 0.0008755358884662236
-  delta_rot_norm_deg: 0.33139163921567316
+  delta_trans_norm_m: 0.001007592132755396
+  delta_rot_norm_deg: 0.31035125863095137
   opt_iters: 10
   opt_alpha: 0.5
 residual_stats:
   pos_err_m:
-    mean: 0.0013752411154051049
-    std: 0.0006707696434341455
-    min: 0.00033168188944734624
-    max: 0.002809162203540715
-    rmse: 0.0015301045846782657
+    mean: 0.001582927013117344
+    std: 0.0006592082745246042
+    min: 0.0005643729336261926
+    max: 0.0031097384586975117
+    rmse: 0.0017147050702841877
   ang_err_deg:
-    mean: 0.6328380394885306
-    std: 0.42547109245793496
-    min: 0.15587268622928627
-    max: 1.4615228610894495
-    rmse: 0.7625677902593551
+    mean: 0.6828820186647251
+    std: 0.5348885615281653
+    min: 0.18032116720483948
+    max: 2.3724047371910615
+    rmse: 0.8674293196965848

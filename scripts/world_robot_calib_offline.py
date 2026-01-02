@@ -50,7 +50,7 @@ import yaml
 ROBOT_NAME = "jaka1"
 
 # 输入数据集（自动录制节点输出的 CSV）
-SOURCE_CSV = "config/world_robot_calib_dataset_jaka1_1767078470.csv"
+SOURCE_CSV = "config/world_robot_calib_dataset_jaka1_1767344301.csv"
 
 # 输出 YAML（world -> base）
 OUTPUT_YAML = "config/world_robot_extrinsic_offline_jaka1.yaml"
