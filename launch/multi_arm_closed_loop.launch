@@ -61,6 +61,21 @@
           output="screen">
       <param name="ip" value="$(arg jaka1_ip)" />
       <param name="robot_ip" value="$(arg jaka1_ip)" />
+      <remap from="/jaka_driver/joint_position" to="jaka_driver/joint_position"/>
+      <remap from="/jaka_driver/robot_states"   to="jaka_driver/robot_states"/>
+      <remap from="/jaka_driver/tool_position"  to="jaka_driver/tool_position"/>
+      <remap from="/jaka_driver/linear_move"        to="jaka_driver/linear_move"/>
+      <remap from="/jaka_driver/joint_move"         to="jaka_driver/joint_move"/>
+      <remap from="/jaka_driver/servo_p"            to="jaka_driver/servo_p"/>
+      <remap from="/jaka_driver/servo_j"            to="jaka_driver/servo_j"/>
+      <remap from="/jaka_driver/servo_move_enable"  to="jaka_driver/servo_move_enable"/>
+      <remap from="/jaka_driver/drag_move"          to="jaka_driver/drag_move"/>
+      <remap from="/jaka_driver/jog"                to="jaka_driver/jog"/>
+      <remap from="/jaka_driver/set_collisionlevel" to="jaka_driver/set_collisionlevel"/>
+      <remap from="/jaka_driver/set_payload"        to="jaka_driver/set_payload"/>
+      <remap from="/jaka_driver/set_toolframe"      to="jaka_driver/set_toolframe"/>
+      <remap from="/jaka_driver/set_userframe"      to="jaka_driver/set_userframe"/>
+      <remap from="/jaka_driver/stop_move"          to="jaka_driver/stop_move"/>
     </node>
 
     <node pkg="jaka_close_contro"
@@ -72,6 +87,7 @@
           type="robot_state_publisher"
           name="robot_state_publisher">
       <param name="publish_frequency" value="100.0" />
+      <remap from="/joint_states" to="joint_states"/>
     </node>
   </group>
 
@@ -85,6 +101,21 @@
           output="screen">
       <param name="ip" value="$(arg jaka2_ip)" />
       <param name="robot_ip" value="$(arg jaka2_ip)" />
+      <remap from="/jaka_driver/joint_position" to="jaka_driver/joint_position"/>
+      <remap from="/jaka_driver/robot_states"   to="jaka_driver/robot_states"/>
+      <remap from="/jaka_driver/tool_position"  to="jaka_driver/tool_position"/>
+      <remap from="/jaka_driver/linear_move"        to="jaka_driver/linear_move"/>
+      <remap from="/jaka_driver/joint_move"         to="jaka_driver/joint_move"/>
+      <remap from="/jaka_driver/servo_p"            to="jaka_driver/servo_p"/>
+      <remap from="/jaka_driver/servo_j"            to="jaka_driver/servo_j"/>
+      <remap from="/jaka_driver/servo_move_enable"  to="jaka_driver/servo_move_enable"/>
+      <remap from="/jaka_driver/drag_move"          to="jaka_driver/drag_move"/>
+      <remap from="/jaka_driver/jog"                to="jaka_driver/jog"/>
+      <remap from="/jaka_driver/set_collisionlevel" to="jaka_driver/set_collisionlevel"/>
+      <remap from="/jaka_driver/set_payload"        to="jaka_driver/set_payload"/>
+      <remap from="/jaka_driver/set_toolframe"      to="jaka_driver/set_toolframe"/>
+      <remap from="/jaka_driver/set_userframe"      to="jaka_driver/set_userframe"/>
+      <remap from="/jaka_driver/stop_move"          to="jaka_driver/stop_move"/>
     </node>
 
     <node pkg="jaka_close_contro"
@@ -96,6 +127,7 @@
           type="robot_state_publisher"
           name="robot_state_publisher">
       <param name="publish_frequency" value="100.0" />
+      <remap from="/joint_states" to="joint_states"/>
     </node>
   </group>
 
@@ -109,6 +141,21 @@
           output="screen">
       <param name="ip" value="$(arg jaka3_ip)" />
       <param name="robot_ip" value="$(arg jaka3_ip)" />
+      <remap from="/jaka_driver/joint_position" to="jaka_driver/joint_position"/>
+      <remap from="/jaka_driver/robot_states"   to="jaka_driver/robot_states"/>
+      <remap from="/jaka_driver/tool_position"  to="jaka_driver/tool_position"/>
+      <remap from="/jaka_driver/linear_move"        to="jaka_driver/linear_move"/>
+      <remap from="/jaka_driver/joint_move"         to="jaka_driver/joint_move"/>
+      <remap from="/jaka_driver/servo_p"            to="jaka_driver/servo_p"/>
+      <remap from="/jaka_driver/servo_j"            to="jaka_driver/servo_j"/>
+      <remap from="/jaka_driver/servo_move_enable"  to="jaka_driver/servo_move_enable"/>
+      <remap from="/jaka_driver/drag_move"          to="jaka_driver/drag_move"/>
+      <remap from="/jaka_driver/jog"                to="jaka_driver/jog"/>
+      <remap from="/jaka_driver/set_collisionlevel" to="jaka_driver/set_collisionlevel"/>
+      <remap from="/jaka_driver/set_payload"        to="jaka_driver/set_payload"/>
+      <remap from="/jaka_driver/set_toolframe"      to="jaka_driver/set_toolframe"/>
+      <remap from="/jaka_driver/set_userframe"      to="jaka_driver/set_userframe"/>
+      <remap from="/jaka_driver/stop_move"          to="jaka_driver/stop_move"/>
     </node>
 
     <node pkg="jaka_close_contro"
@@ -120,6 +167,7 @@
           type="robot_state_publisher"
           name="robot_state_publisher">
       <param name="publish_frequency" value="100.0" />
+      <remap from="/joint_states" to="joint_states"/>
     </node>
   </group>
 
@@ -133,6 +181,21 @@
           output="screen">
       <param name="ip" value="$(arg jaka4_ip)" />
       <param name="robot_ip" value="$(arg jaka4_ip)" />
+      <remap from="/jaka_driver/joint_position" to="jaka_driver/joint_position"/>
+      <remap from="/jaka_driver/robot_states"   to="jaka_driver/robot_states"/>
+      <remap from="/jaka_driver/tool_position"  to="jaka_driver/tool_position"/>
+      <remap from="/jaka_driver/linear_move"        to="jaka_driver/linear_move"/>
+      <remap from="/jaka_driver/joint_move"         to="jaka_driver/joint_move"/>
+      <remap from="/jaka_driver/servo_p"            to="jaka_driver/servo_p"/>
+      <remap from="/jaka_driver/servo_j"            to="jaka_driver/servo_j"/>
+      <remap from="/jaka_driver/servo_move_enable"  to="jaka_driver/servo_move_enable"/>
+      <remap from="/jaka_driver/drag_move"          to="jaka_driver/drag_move"/>
+      <remap from="/jaka_driver/jog"                to="jaka_driver/jog"/>
+      <remap from="/jaka_driver/set_collisionlevel" to="jaka_driver/set_collisionlevel"/>
+      <remap from="/jaka_driver/set_payload"        to="jaka_driver/set_payload"/>
+      <remap from="/jaka_driver/set_toolframe"      to="jaka_driver/set_toolframe"/>
+      <remap from="/jaka_driver/set_userframe"      to="jaka_driver/set_userframe"/>
+      <remap from="/jaka_driver/stop_move"          to="jaka_driver/stop_move"/>
     </node>
 
     <node pkg="jaka_close_contro"
@@ -144,6 +207,7 @@
           type="robot_state_publisher"
           name="robot_state_publisher">
       <param name="publish_frequency" value="100.0" />
+      <remap from="/joint_states" to="joint_states"/>
     </node>
   </group>
 
