@@ -1,7 +1,8 @@
 #include <ros/ros.h>
-#include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Twist.h>
+#include <geometry_msgs/PoseStamped.h>
 #include <std_msgs/String.h>
+#include <std_msgs/Bool.h>
 #include <std_srvs/Empty.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <yaml-cpp/yaml.h>
@@ -9,6 +10,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <sensor_msgs/JointState.h>
+#include <limits>
 #include <jaka_msgs/Move.h>
 #include <jaka_close_contro/SetPoseTarget.h>
 #include <jaka_close_contro/GetCubePoseWorld.h>
@@ -281,10 +283,23 @@ public:
     pnh_.param<std::string>("joint_state_topic", joint_state_topic_, std::string("joint_states"));
     pnh_.param<double>("motion_joint_threshold_rad", motion_joint_threshold_rad_, 0.002);
     pnh_.param<double>("motion_stable_duration_sec", motion_stable_duration_sec_, 0.5);
-    pnh_.param<double>("motion_done_timeout_sec", motion_done_timeout_sec_, 5.0);
+    pnh_.param<double>("motion_done_timeout_sec", motion_done_timeout_sec_, 8.0);
     pnh_.param<double>("settle_after_motion_sec", settle_after_motion_sec_, 0.1);
     pnh_.param<double>("send_rate_hz", send_rate_hz_, 5.0);
     pnh_.param<double>("resume_factor", resume_factor_, 2.0);
+    pnh_.param<double>("dt_cmd_min", dt_cmd_min_, 0.05);
+    pnh_.param<double>("dt_cmd_max", dt_cmd_max_, 1.0);
+    pnh_.param<std::string>("dt_cmd_mode", dt_cmd_mode_, std::string("elapsed"));
+    pnh_.param<bool>("use_step_limits", use_step_limits_, true);
+    pnh_.param<double>("step_pos_max_m", step_pos_max_m_, 0.01);
+    pnh_.param<double>("step_ang_max_deg", step_ang_max_deg_, 3.0);
+    pnh_.param<double>("step_pos_min_m", step_pos_min_m_, 0.0005);
+    pnh_.param<double>("step_ang_min_deg", step_ang_min_deg_, 0.2);
+    pnh_.param<double>("progress_timeout_s", progress_timeout_s_, servo_timeout_s_);
+    pnh_.param<double>("progress_eps_pos_m", progress_eps_pos_m_, 0.002);
+    pnh_.param<double>("progress_eps_ang_deg", progress_eps_ang_deg_, 0.5);
+    progress_eps_ang_rad_ = progress_eps_ang_deg_ * M_PI / 180.0;
+    pnh_.param<double>("progress_improve_ratio", progress_improve_ratio_, 0.98);
     pnh_.param<std::string>("cube_pose_topic", cube_pose_topic_,
                             std::string("/vision/" + robot_name_ + "/cube_center_world"));
     pnh_.param<std::string>("target_topic", target_topic_, std::string("target_tool_world"));
@@ -332,6 +347,9 @@ public:
     joint_sub_ = nh_.subscribe(joint_state_topic_, 1, &PoseServoWorld::jointCb, this);
     status_pub_ = pnh_.advertise<std_msgs::String>("status", 1, true);
     err_pub_ = pnh_.advertise<geometry_msgs::Twist>("err", 1, true);
+    reached_pub_ = pnh_.advertise<std_msgs::Bool>("reached", 1, true);
+    result_pub_ = pnh_.advertise<std_msgs::String>("result", 1, true);
+    last_cmd_pub_ = pnh_.advertise<geometry_msgs::PoseStamped>("last_cmd_base_tool", 1, true);
 
     set_target_srv_ = pnh_.advertiseService("set_target", &PoseServoWorld::setTargetSrv, this);
     stop_srv_ = pnh_.advertiseService("stop", &PoseServoWorld::stopSrv, this);
@@ -348,6 +366,7 @@ private:
   enum class State
   {
     IDLE,
+    SETTLING,
     MOVING,
     RUN,
     HOLD,
@@ -424,6 +443,9 @@ private:
     target_active_ = true;
     target_start_time_ = ros::Time::now();
     goal_reached_ = false;
+    best_ep_norm_ = std::numeric_limits<double>::infinity();
+    best_etheta_norm_ = std::numeric_limits<double>::infinity();
+    last_progress_time_ = ros::Time::now();
     state_ = State::RUN;
   }
 
@@ -444,6 +466,9 @@ private:
     target_active_ = true;
     target_start_time_ = ros::Time::now();
     goal_reached_ = false;
+    best_ep_norm_ = std::numeric_limits<double>::infinity();
+    best_etheta_norm_ = std::numeric_limits<double>::infinity();
+    last_progress_time_ = ros::Time::now();
     state_ = State::RUN;
     res.ok = true;
     res.message = "target accepted";
@@ -454,6 +479,7 @@ private:
   {
     state_ = State::HOLD;
     target_active_ = false;
+    publishReached(false, "STOPPED");
     return true;
   }
 
@@ -462,6 +488,7 @@ private:
     target_active_ = false;
     state_ = State::IDLE;
     goal_reached_ = false;
+    publishReached(false, "STOPPED");
     return true;
   }
 
@@ -493,10 +520,17 @@ private:
 
   void publishStatus(const Eigen::Vector3d &ep, const Eigen::Vector3d &etheta, double age)
   {
+    last_ep_ = ep;
+    last_etheta_ = etheta;
     std_msgs::String msg;
     std::stringstream ss;
+    double now = ros::Time::now().toSec();
+    double last_step_age = last_step_time_.isZero() ? -1.0 : now - last_step_time_.toSec();
+    double last_progress_age = last_progress_time_.isZero() ? -1.0 : now - last_progress_time_.toSec();
     ss << "state=" << stateToString(state_) << " ep=" << ep.norm() << " etheta=" << etheta.norm()
-       << " cube_age=" << age;
+       << " cube_age=" << age << " dt_cmd_used=" << last_dt_cmd_used_
+       << " cmd_seq=" << command_seq_ << " last_step_age=" << last_step_age
+       << " last_progress_age=" << last_progress_age << " last_move_ret=" << last_move_ret_;
     msg.data = ss.str();
     status_pub_.publish(msg);
 
@@ -516,6 +550,8 @@ private:
     {
     case State::IDLE:
       return "IDLE";
+    case State::SETTLING:
+      return "SETTLING";
     case State::MOVING:
       return "MOVING";
     case State::RUN:
@@ -526,6 +562,35 @@ private:
       return "DISCONNECTED";
     }
     return "UNKNOWN";
+  }
+
+  enum class SendResult
+  {
+    OK,
+    NO_SERVICE,
+    CALL_FAIL,
+    RET_FAIL
+  };
+
+  void publishReached(bool reached, const std::string &result)
+  {
+    std_msgs::Bool b;
+    b.data = reached;
+    reached_pub_.publish(b);
+    std_msgs::String r;
+    r.data = result;
+    result_pub_.publish(r);
+    last_result_ = result;
+  }
+
+  void publishLastCmd(const Eigen::Isometry3d &T_base_tool, uint64_t seq)
+  {
+    geometry_msgs::PoseStamped msg;
+    msg.header.stamp = ros::Time::now();
+    msg.header.frame_id = "base";
+    msg.pose = isoToPoseMsg(T_base_tool);
+    last_cmd_pub_.publish(msg);
+    last_cmd_seq_ = seq;
   }
 
   bool motionStable(const ros::Time &now)
@@ -580,15 +645,18 @@ private:
     return age_out > vision_timeout_s_;
   }
 
-  bool sendCommand(const Eigen::Isometry3d &T_base_tool)
+  SendResult sendCommand(const Eigen::Isometry3d &T_base_tool)
   {
     if (!connect_robot_)
     {
-      return true;
+      return SendResult::OK;
     }
     if (!linear_move_client_.exists())
     {
-      linear_move_client_.waitForExistence(ros::Duration(0.1));
+      if (!linear_move_client_.waitForExistence(ros::Duration(0.2)))
+      {
+        return SendResult::NO_SERVICE;
+      }
     }
     Eigen::Quaterniond q(T_base_tool.rotation());
     q.normalize();
@@ -614,15 +682,15 @@ private:
     if (!linear_move_client_.call(srv))
     {
       ROS_WARN_THROTTLE(1.0, "[PoseServo] linear_move call failed");
-      return false;
+      return SendResult::CALL_FAIL;
     }
     if (srv.response.ret != 0)
     {
       ROS_WARN_THROTTLE(1.0, "[PoseServo] linear_move ret=%d message=%s", srv.response.ret,
                         srv.response.message.c_str());
-      return false;
+      return SendResult::RET_FAIL;
     }
-    return true;
+    return SendResult::OK;
   }
 
   void updateTimer(const ros::TimerEvent &)
@@ -634,6 +702,7 @@ private:
       {
         state_ = State::HOLD;
         ROS_WARN_THROTTLE(1.0, "[PoseServo] vision timeout, holding commands");
+        publishReached(false, "VISION_TIMEOUT");
       }
       publishStatus(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), cube_age);
       return;
@@ -645,14 +714,6 @@ private:
     }
     if (state_ == State::DISCONNECTED || !enable_)
     {
-      publishStatus(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), cube_age);
-      return;
-    }
-
-    if ((ros::Time::now() - target_start_time_).toSec() > servo_timeout_s_)
-    {
-      ROS_WARN_THROTTLE(1.0, "[PoseServo] servo timeout, holding");
-      state_ = State::HOLD;
       publishStatus(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), cube_age);
       return;
     }
@@ -672,8 +733,37 @@ private:
     {
       state_ = State::IDLE;
       goal_reached_ = true;
+      publishReached(true, "REACHED");
       publishStatus(latest_ep_, latest_etheta_, cube_age);
       return;
+    }
+
+    // progress tracking
+    bool improved = false;
+    if (ep_norm < best_ep_norm_ * progress_improve_ratio_ || best_ep_norm_ - ep_norm > progress_eps_pos_m_)
+    {
+      best_ep_norm_ = ep_norm;
+      improved = true;
+    }
+    if (etheta_norm < best_etheta_norm_ * progress_improve_ratio_ || best_etheta_norm_ - etheta_norm > progress_eps_ang_rad_)
+    {
+      best_etheta_norm_ = etheta_norm;
+      improved = true;
+    }
+    if (improved || last_progress_time_.isZero())
+    {
+      last_progress_time_ = ros::Time::now();
+    }
+    else
+    {
+      if (!last_progress_time_.isZero() &&
+          (ros::Time::now() - last_progress_time_).toSec() > progress_timeout_s_)
+      {
+        state_ = State::HOLD;
+        publishReached(false, "SERVO_TIMEOUT_NO_PROGRESS");
+        publishStatus(latest_ep_, latest_etheta_, cube_age);
+        return;
+      }
     }
 
     if (state_ == State::IDLE && goal_reached_)
@@ -714,6 +804,7 @@ private:
       {
         ROS_WARN("[PoseServo] motion timeout, holding");
         state_ = State::HOLD;
+        publishReached(false, "MOTION_DONE_TIMEOUT");
         return;
       }
       if (!motionStable(now))
@@ -721,8 +812,18 @@ private:
         ROS_DEBUG_THROTTLE(2.0, "[PoseServo] waiting for motion to settle");
         return;
       }
+      state_ = State::SETTLING;
+      settle_until_ = now + ros::Duration(settle_after_motion_sec_);
+      ROS_INFO("[PoseServo] motion settled, entering SETTLING");
+      return;
+    }
+    if (state_ == State::SETTLING)
+    {
+      if (now < settle_until_)
+      {
+        return;
+      }
       state_ = State::RUN;
-      ROS_INFO("[PoseServo] motion settled, ready for next command");
     }
 
     if (state_ == State::IDLE && goal_reached_)
@@ -756,25 +857,58 @@ private:
     {
       state_ = State::IDLE;
       goal_reached_ = true;
+      publishReached(true, "REACHED");
       return;
     }
 
-    Eigen::Vector3d v_cmd = kp_pos_ * ep;
-    Eigen::Vector3d w_cmd = kp_ang_ * etheta;
-    if (v_cmd.norm() > v_max_)
-    {
-      v_cmd = v_cmd.normalized() * v_max_;
-    }
-    if (w_cmd.norm() > w_max_rad_)
-    {
-      w_cmd = w_cmd.normalized() * w_max_rad_;
-    }
-
     Eigen::Matrix<double, 6, 1> xi_cmd;
-    xi_cmd.head<3>() = v_cmd;
-    xi_cmd.tail<3>() = w_cmd;
-    double dt_cmd = 1.0 / send_rate_hz_;
-    Eigen::Isometry3d Delta = expSE3(xi_cmd * dt_cmd);
+    if (use_step_limits_)
+    {
+      Eigen::Vector3d dp = kp_pos_ * ep;
+      Eigen::Vector3d dth = kp_ang_ * etheta;
+      double pos_max = step_pos_max_m_;
+      double pos_min = step_pos_min_m_;
+      double ang_max = step_ang_max_deg_ * M_PI / 180.0;
+      double ang_min = step_ang_min_deg_ * M_PI / 180.0;
+      if (dp.norm() > pos_max)
+        dp = dp.normalized() * pos_max;
+      if (dp.norm() < pos_min)
+        dp = dp.normalized() * pos_min;
+      if (dth.norm() > ang_max)
+        dth = dth.normalized() * ang_max;
+      if (dth.norm() < ang_min)
+        dth = dth.normalized() * ang_min;
+      xi_cmd.head<3>() = dp;
+      xi_cmd.tail<3>() = dth;
+    }
+    else
+    {
+      Eigen::Vector3d v_cmd = kp_pos_ * ep;
+      Eigen::Vector3d w_cmd = kp_ang_ * etheta;
+      if (v_cmd.norm() > v_max_)
+      {
+        v_cmd = v_cmd.normalized() * v_max_;
+      }
+      if (w_cmd.norm() > w_max_rad_)
+      {
+        w_cmd = w_cmd.normalized() * w_max_rad_;
+      }
+      double dt_cmd_raw = last_step_time_.isZero() ? (1.0 / send_rate_hz_) : (now - last_step_time_).toSec();
+      if (dt_cmd_mode_ == "fixed")
+      {
+        dt_cmd_raw = 1.0 / send_rate_hz_;
+      }
+      double dt_cmd = std::max(dt_cmd_min_, std::min(dt_cmd_raw, dt_cmd_max_));
+      xi_cmd.head<3>() = v_cmd;
+      xi_cmd.tail<3>() = w_cmd;
+      xi_cmd *= dt_cmd;
+      last_dt_cmd_used_ = dt_cmd;
+    }
+    if (use_step_limits_)
+    {
+      last_dt_cmd_used_ = -1.0;
+    }
+    Eigen::Isometry3d Delta = expSE3(xi_cmd);
     Eigen::Isometry3d T_world_cube_next = T_world_cube_est * Delta;
     Eigen::Isometry3d T_cube_to_tool = T_tool_to_cube_.inverse();
     Eigen::Isometry3d T_world_tool_next = T_world_cube_next * T_cube_to_tool;
@@ -788,19 +922,31 @@ private:
     }
 
     uint64_t cmd_seq = command_seq_++;
-    ROS_INFO("[PoseServo] cmd seq=%lu ep=%.4f etheta=%.4f dt=%.3f", cmd_seq, ep.norm(), etheta.norm(), dt_cmd);
+    ROS_INFO("[PoseServo] cmd seq=%lu ep=%.4f etheta=%.4f dt=%.3f", cmd_seq, ep.norm(), etheta.norm(), last_dt_cmd_used_);
 
-    bool ok = sendCommand(T_base_tool_next);
+    SendResult res = sendCommand(T_base_tool_next);
     last_command_sent_time_ = now;
     last_command_pose_ = T_base_tool_next;
-    if (!ok)
+    if (res == SendResult::NO_SERVICE || res == SendResult::CALL_FAIL)
+    {
+      state_ = State::DISCONNECTED;
+      last_move_ret_ = "NO_SERVICE";
+      publishReached(false, "NO_SERVICE");
+      return;
+    }
+    if (res == SendResult::RET_FAIL)
     {
       state_ = State::HOLD;
-      ROS_WARN("[PoseServo] linear_move failed, holding");
+      last_move_ret_ = "RET_FAIL";
+      publishReached(false, "MOVE_RET_FAIL");
       return;
     }
     state_ = State::MOVING;
     goal_reached_ = false;
+    last_step_time_ = now;
+    last_progress_time_ = now;
+    last_move_ret_ = "OK";
+    publishLastCmd(T_base_tool_next, cmd_seq);
   }
 
   ros::NodeHandle nh_;
@@ -834,6 +980,9 @@ private:
   ros::Subscriber joint_sub_;
   ros::Publisher status_pub_;
   ros::Publisher err_pub_;
+  ros::Publisher reached_pub_;
+  ros::Publisher result_pub_;
+  ros::Publisher last_cmd_pub_;
   ros::ServiceServer set_target_srv_;
   ros::ServiceServer stop_srv_;
   ros::ServiceServer clear_target_srv_;
@@ -868,6 +1017,19 @@ private:
   double settle_after_motion_sec_{0.1};
   double send_rate_hz_{5.0};
   double resume_factor_{2.0};
+  double dt_cmd_min_{0.05};
+  double dt_cmd_max_{1.0};
+  std::string dt_cmd_mode_{"elapsed"};
+  bool use_step_limits_{true};
+  double step_pos_max_m_{0.01};
+  double step_ang_max_deg_{3.0};
+  double step_pos_min_m_{0.0005};
+  double step_ang_min_deg_{0.2};
+  double progress_timeout_s_{10.0};
+  double progress_eps_pos_m_{0.002};
+  double progress_eps_ang_deg_{0.5};
+  double progress_eps_ang_rad_{0.5 * M_PI / 180.0};
+  double progress_improve_ratio_{0.98};
 
   std::mutex joint_mutex_;
   std::vector<double> prev_joint_pos_;
@@ -876,6 +1038,18 @@ private:
   ros::Time last_motion_time_;
   ros::Time last_joint_stamp_;
   ros::Time motion_stable_start_;
+  ros::Time last_step_time_;
+  ros::Time settle_until_;
+  double last_dt_cmd_used_{0.0};
+  uint64_t last_cmd_seq_{0};
+  std::string last_move_ret_{"NONE"};
+  double best_ep_norm_{std::numeric_limits<double>::infinity()};
+  double best_etheta_norm_{std::numeric_limits<double>::infinity()};
+  ros::Time last_progress_time_;
+  std::string last_result_{"INIT"};
+
+  Eigen::Vector3d last_ep_{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d last_etheta_{Eigen::Vector3d::Zero()};
 };
 
 int main(int argc, char **argv)
