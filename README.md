@@ -153,71 +153,39 @@ roscore  # 如未运行，请先启动
   - 控制/阈值：`kp_pos`/`kp_ang`/`v_max`/`w_max_deg`/`eps_pos_m`/`eps_ang_deg` 等 rosparam，可在 launch 覆盖。  
 - 前提：不设置目标则不会运动；若想确保绝对不动，使用 `connect_jakaX:=false`。
 
-### (2) 发送目标（world 下 tool/link6 位姿）
-- 推荐脚本（service 调用）：  
-  ```bash
-  rosrun jaka_close_contro send_world_target.py --robot jaka2 \
-    --x 0.20 --y -0.10 --z 0.35 --roll_deg 0 --pitch_deg 0 --yaw_deg 90
-  rosrun jaka_close_contro send_world_target.py --robot jaka4 \
-    --x 0.25 --y -0.05 --z 0.33 --qx 0 --qy 0 --qz 0.7071 --qw 0.7071
-  ```
-- 直接 service（等价于脚本内部调用）：  
-  ```bash
-  rosservice call /jaka2/pose_servo_world/set_target "{target: {header: {frame_id: 'world'}, pose: {position: {x: 0.20, y: -0.10, z: 0.35}, orientation: {x: 0.0, y: 0.0, z: 0.7071, w: 0.7071}}}}"
-  rosservice call /jaka4/pose_servo_world/set_target "{target: {header: {frame_id: 'world'}, pose: {position: {x: 0.25, y: -0.05, z: 0.33}, orientation: {x: 0.0, y: 0.0, z: 0.7071, w: 0.7071}}}}"
-  ```
-
-### 多臂闭环专用 bringup（推荐）
-- 启动示例（两台）：  
+### (2) 多臂闭环 bringup（推荐入口）
+- 一次性启动多臂驱动 + TF→Pose 桥 + 闭环控制（以 jaka1+jaka2 为例）：  
   ```bash
   roslaunch jaka_close_contro multi_arm_closed_loop.launch \
     enable_jaka1:=true enable_jaka2:=true enable_jaka3:=false enable_jaka4:=false \
-    connect_jaka1:=true connect_jaka2:=true \
-    start_vision:=true \
-    jaka1_ip:=192.168.1.100 jaka2_ip:=192.168.1.101
+    connect_jaka1:=true connect_jaka2:=true start_vision:=true
   ```
-- 验证各自 namespace 下的 IP 参数：  
-  ```bash
-  rosparam get /jaka1/ip
-  rosparam get /jaka2/ip
-  ```
-  期望输出分别为 `192.168.1.100`、`192.168.1.101`（示例）。  
-- 查看 driver 连接日志：启动时应看到 `try to connect: <IP>`，且 jaka1/jaka2 分别使用自己的 IP，不会互相覆盖。  
-- 说明：multi_arm_closed_loop.launch 已内联每台机械臂的 bringup， 在各自 namespace 下设置 `/jakaX/ip` 并给 driver 提供私有 `~ip`/`~robot_ip`，避免使用全局 `/ip` 造成多臂冲突。
+- 关键参数（launch 内按 namespace 注入，每臂独立）：`calib_yaml_jakaX`、`cube_pose_topic_jakaX`、`kp_pos`/`kp_ang`、`v_max`、`w_max_deg`、`eps_pos_m`、`eps_ang_deg`、`vision_timeout_s`、`servo_timeout_s` 等。【F:launch/multi_arm_closed_loop.launch†L409-L495】
 
-### (3) 停止 / 清除目标
-- stop：立即进入 HOLD/停止更新命令  
+### (3) 发送目标（world 下工具末端位姿）
+- service 示例（只需替换 `<robot>` 为 jaka1~4，对应 namespace）：  
   ```bash
-  rosservice call /jaka2/pose_servo_world/stop "{}"
-  rosservice call /jaka4/pose_servo_world/stop "{}"
+  rosservice call /<robot>/pose_servo_world/set_target "{target: {header: {frame_id: 'world'}, pose: {position: {x: 0.20, y: -0.10, z: 0.35}, orientation: {x: 0.0, y: 0.0, z: 0.7071, w: 0.7071}}}}"
   ```
-- clear_target：清空目标，回到 IDLE  
+- 快捷脚本（内部同样调用 set_target）：  
   ```bash
-  rosservice call /jaka2/pose_servo_world/clear_target "{}"
-  rosservice call /jaka4/pose_servo_world/clear_target "{}"
+  rosrun jaka_close_contro send_world_target.py --robot <robot> --x 0.20 --y -0.10 --z 0.35 --yaw_deg 90
   ```
+- 关键私有参数（`pose_servo_world_node` 内读取）：  
+  - `use_two_stage` 默认 `true`，先粗定位（预进场 + 前馈），达阈值后进入精调闭环。  
+  - 粗定位速度/门限：`coarse_v_max`、`coarse_w_max_deg`、`coarse_pos_gate_m`、`coarse_ang_gate_deg`、`coarse_approach_dist_m`、`coarse_approach_axis`、`coarse_keep_current_orientation`。  
+  - 精调继续使用 `kp_pos`/`kp_ang`、`v_max`/`w_max_deg`、`eps_pos_m`/`eps_ang_deg` 及步长/速度限幅等。【F:src/pose_servo_world_node.cpp†L266-L559】
 
-### (4) 查看状态
-- status（字符串：state=RUN/IDLE/HOLD/DISCONNECTED, ep(m), etheta(rad), cube_age(s)）：  
-  ```bash
-  rostopic echo /jaka2/pose_servo_world/status
-  rostopic info /jaka2/pose_servo_world/status
-  ```
-- err（Twist：linear=ep(m), angular=etheta(rad)）：  
-  ```bash
-  rostopic echo /jaka2/pose_servo_world/err
-  ```
-- 如无输出，先 `rostopic list` 检查话题是否存在、namespace 是否正确。
+### (4) 停止 / 清空目标
+- 停止（进入 HOLD）：`rosservice call /<robot>/pose_servo_world/stop "{}"`
+- 清空目标（回 IDLE）：`rosservice call /<robot>/pose_servo_world/clear_target "{}"`
 
-### (5) 查询 cube 在 world 下的位姿（本次新增）
-- 直接 service：  
-  ```bash
-  rosservice call /jaka2/pose_servo_world/get_cube_pose_world "{}"
-  ```
-- 脚本：  
-  ```bash
-  rosrun jaka_close_contro get_cube_pose_world.py --robot jaka2
-  ```
+### (5) 监控与诊断
+- 状态字符串：`/<robot>/pose_servo_world/status`，包含 `state`、`phase`、误差、命令序号等。  
+- 误差向量：`/<robot>/pose_servo_world/err`（Twist，位置/姿态误差）。  
+- 到达/结果：`/<robot>/pose_servo_world/reached`、`/<robot>/pose_servo_world/result`。  
+- 上一次命令：`/<robot>/pose_servo_world/last_cmd_base_tool`（PoseStamped，base->tool）。  
+- 查询当前视觉位姿：`rosservice call /<robot>/pose_servo_world/get_cube_pose_world "{}"` 或脚本 `rosrun jaka_close_contro get_cube_pose_world.py --robot <robot>`。
 
 ## 一键闭环（视觉链路 + 多臂驱动 + TF->Pose 桥 + 闭环控制）
 
