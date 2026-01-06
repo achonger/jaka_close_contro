@@ -321,6 +321,11 @@ public:
     w_max_rad_ = w_max_deg_ * M_PI / 180.0;
     eps_ang_rad_ = eps_ang_deg_ * M_PI / 180.0;
 
+    if (use_two_stage_)
+    {
+      ROS_INFO("[PoseServo] Two-stage mode: direct-to-target feedforward then FINE; COARSE_APPROACH is disabled.");
+    }
+
     // Resolve calib path (expand package keyword if present)
     if (calib_yaml.find("$(find") != std::string::npos)
     {
@@ -465,7 +470,7 @@ private:
     best_etheta_norm_ = std::numeric_limits<double>::infinity();
     last_progress_time_ = ros::Time::now();
     state_ = State::RUN;
-    phase_ = use_two_stage_ ? Phase::COARSE_APPROACH : Phase::FINE;
+    phase_ = use_two_stage_ ? Phase::COARSE_FEEDFORWARD : Phase::FINE;
     coarse_ff_sent_ = false;
     coarse_done_reported_ = false;
   }
@@ -491,7 +496,7 @@ private:
     best_etheta_norm_ = std::numeric_limits<double>::infinity();
     last_progress_time_ = ros::Time::now();
     state_ = State::RUN;
-    phase_ = use_two_stage_ ? Phase::COARSE_APPROACH : Phase::FINE;
+    phase_ = use_two_stage_ ? Phase::COARSE_FEEDFORWARD : Phase::FINE;
     coarse_ff_sent_ = false;
     coarse_done_reported_ = false;
     res.ok = true;
@@ -932,39 +937,6 @@ private:
     Eigen::Vector3d ep = xi.head<3>();
     Eigen::Vector3d etheta = xi.tail<3>();
 
-    auto shouldEnterFine = [&]() -> bool {
-      if (!have_cube_pose_)
-      {
-        return true;
-      }
-      if (ep.norm() < coarse_pos_gate_m_ && etheta.norm() < coarse_ang_gate_rad_)
-      {
-        return true;
-      }
-      if (ep.norm() < coarse_pos_gate_m_)
-      {
-        return true;
-      }
-      return false;
-    };
-
-    if (phase_ == Phase::COARSE_FEEDFORWARD && coarse_ff_sent_ && state_ == State::RUN)
-    {
-      if (shouldEnterFine())
-      {
-        phase_ = Phase::FINE;
-        if (!coarse_done_reported_)
-        {
-          publishReached(false, "COARSE_DONE");
-          coarse_done_reported_ = true;
-        }
-      }
-      else
-      {
-        coarse_ff_sent_ = false;
-      }
-    }
-
     auto dispatchCommand = [&](const Eigen::Isometry3d &T_base_tool_next, double v_forced, const std::string &tag) -> bool {
       if (!linear_move_client_.exists())
       {
@@ -1000,27 +972,19 @@ private:
       return true;
     };
 
-    if (phase_ == Phase::COARSE_APPROACH)
-    {
-      Eigen::Isometry3d T_world_tool_approach = T_world_tool_des;
-      T_world_tool_approach.translation() += approachOffset(T_world_tool_des.rotation());
-      T_world_tool_approach.linear() = coarseOrientation(T_world_tool_des);
-      Eigen::Isometry3d T_base_tool_next = T_world_base_.inverse() * T_world_tool_approach;
-      if (dispatchCommand(T_base_tool_next, coarse_v_max_, "COARSE_APPROACH"))
-      {
-        phase_ = Phase::COARSE_FEEDFORWARD;
-      }
-      return;
-    }
-
     if (phase_ == Phase::COARSE_FEEDFORWARD && !coarse_ff_sent_)
     {
       Eigen::Isometry3d T_world_tool_ff = T_world_tool_des;
-      T_world_tool_ff.linear() = coarseOrientation(T_world_tool_des);
       Eigen::Isometry3d T_base_tool_next = T_world_base_.inverse() * T_world_tool_ff;
       if (dispatchCommand(T_base_tool_next, coarse_v_max_, "COARSE_FEEDFORWARD"))
       {
         coarse_ff_sent_ = true;
+        phase_ = Phase::FINE;
+        if (!coarse_done_reported_)
+        {
+          publishReached(false, "COARSE_DONE");
+          coarse_done_reported_ = true;
+        }
       }
       return;
     }
