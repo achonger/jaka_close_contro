@@ -32,6 +32,8 @@
   <arg name="camera_frame" default="zed2i_left_camera_optical_frame" />
   <arg name="urdf_file" default="$(find jaka_close_contro)/urdf/jaka_zu3.urdf" />
   <arg name="strict_cube_frame" default="true" />
+  <arg name="tool_marker_length_m" default="0.04" />
+  <arg name="tool_marker_separation_m" default="0.005" />
 
   <!-- Robot IPs -->
   <arg name="jaka1_ip" default="192.168.1.100" />
@@ -229,8 +231,8 @@
       <param name="default_marker_size" value="0.08"/>
       <param name="dictionary" value="DICT_4X4_50"/>
       <param name="tool_dictionary" value="DICT_6X6_1000"/>
-      <param name="tool_marker_length_m" value="0.0425"/>
-      <param name="tool_marker_separation_m" value="0.005"/>
+      <param name="tool_marker_length_m" value="$(arg tool_marker_length_m)"/>
+      <param name="tool_marker_separation_m" value="$(arg tool_marker_separation_m)"/>
       <param name="min_gridboard_markers" value="2"/>
       <param name="world_board_enable" value="true"/>
       <param name="world_board_output_id" value="500"/>

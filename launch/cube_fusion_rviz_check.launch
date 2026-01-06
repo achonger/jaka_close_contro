@@ -6,6 +6,8 @@
   <arg name="faces_yaml" default="$(find jaka_close_contro)/config/cube_faces_4robots.yaml" />
   <arg name="svo_file" default="" />
   <arg name="use_debug_node" default="true" />
+  <arg name="tool_marker_length_m" default="0.04" />
+  <arg name="tool_marker_separation_m" default="0.005" />
 
   <arg name="enable_jaka1" default="$(eval '1' in str(arg('robot_ids')).replace('[',' ').replace(']',' ').replace(',',' ').split())" />
   <arg name="enable_jaka2" default="$(eval '2' in str(arg('robot_ids')).replace('[',' ').replace(']',' ').replace(',',' ').split())" />
@@ -25,8 +27,8 @@
     <param name="default_marker_size" value="0.08" />
     <param name="dictionary" value="DICT_4X4_50" />
     <param name="tool_dictionary" value="DICT_6X6_1000" />
-    <param name="tool_marker_length_m" value="0.0425" />
-    <param name="tool_marker_separation_m" value="0.005" />
+    <param name="tool_marker_length_m" value="$(arg tool_marker_length_m)" />
+    <param name="tool_marker_separation_m" value="$(arg tool_marker_separation_m)" />
     <param name="min_gridboard_markers" value="2" />
     <param name="world_board_enable" value="true" />
     <param name="world_board_output_id" value="500" />
