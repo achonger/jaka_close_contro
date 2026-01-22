@@ -309,13 +309,14 @@ public:
 
     pnh_.param<bool>("use_two_stage", use_two_stage_, true);
     pnh_.param<double>("coarse_v_max", coarse_v_max_, 0.08);
+    pnh_.param<bool>("target_is_tip", target_is_tip_, true);
 
     w_max_rad_ = w_max_deg_ * M_PI / 180.0;
     eps_ang_rad_ = eps_ang_deg_ * M_PI / 180.0;
 
     if (use_two_stage_)
     {
-      ROS_INFO("[PoseServo] Two-stage mode: direct-to-target feedforward then FINE; COARSE_APPROACH is disabled.");
+      ROS_INFO("[PoseServo] Two-stage mode: direct-to-target feedforward then FINE.");
     }
 
     // Resolve calib path (expand package keyword if present)
@@ -336,6 +337,11 @@ public:
     }
     T_world_base_ = calib->T_world_base;
     T_tool_to_cube_ = calib->T_tool_to_cube;
+    tool_to_tip_loaded_ = loadToolToTipFromParams();
+    if (tool_to_tip_loaded_)
+    {
+      T_tip_to_cube_ = T_tool_to_tip_.inverse() * T_tool_to_cube_;
+    }
 
     ROS_INFO("[PoseServo] robot=%s id=%d enable=%s connect_robot=%s", robot_name_.c_str(), robot_id_,
              enable_ ? "true" : "false", connect_robot_ ? "true" : "false");
@@ -348,6 +354,18 @@ public:
              T_tool_to_cube_.translation().y(), T_tool_to_cube_.translation().z());
     Eigen::Quaterniond qtc(T_tool_to_cube_.rotation());
     ROS_INFO("[PoseServo] T_tool_to_cube q=[%.4f %.4f %.4f %.4f]", qtc.x(), qtc.y(), qtc.z(), qtc.w());
+    if (tool_to_tip_loaded_)
+    {
+      ROS_INFO("[PoseServo] T_tool_to_tip t=[%.4f %.4f %.4f]", T_tool_to_tip_.translation().x(),
+               T_tool_to_tip_.translation().y(), T_tool_to_tip_.translation().z());
+      Eigen::Quaterniond qtt(T_tool_to_tip_.rotation());
+      ROS_INFO("[PoseServo] T_tool_to_tip q=[%.4f %.4f %.4f %.4f]", qtt.x(), qtt.y(), qtt.z(), qtt.w());
+    }
+    else
+    {
+      ROS_WARN("[PoseServo] tool_extrinsic_tool_to_tip not loaded; target_is_tip=%s will block control",
+               target_is_tip_ ? "true" : "false");
+    }
     ROS_INFO("[PoseServo] cube_pose_topic=%s target_topic=%s", cube_pose_topic_.c_str(), target_topic_.c_str());
 
     cube_sub_ = nh_.subscribe(cube_pose_topic_, 1, &PoseServoWorld::cubeCb, this);
@@ -383,7 +401,6 @@ private:
 
   enum class Phase
   {
-    COARSE_APPROACH,
     COARSE_FEEDFORWARD,
     FINE
   };
@@ -550,7 +567,9 @@ private:
        << " cube_age=" << age << " dt_cmd_used=" << last_dt_cmd_used_
        << " cmd_seq=" << command_seq_ << " last_step_age=" << last_step_age
        << " last_progress_age=" << last_progress_age << " last_move_ret=" << last_move_ret_
-       << " phase=" << phaseToString(phase_);
+       << " phase=" << phaseToString(phase_) << " target_is_tip=" << (target_is_tip_ ? "true" : "false")
+       << " tip_loaded=" << (tool_to_tip_loaded_ ? "true" : "false")
+       << " tip_z=" << T_tool_to_tip_.translation().z();
     msg.data = ss.str();
     status_pub_.publish(msg);
 
@@ -588,8 +607,6 @@ private:
   {
     switch (p)
     {
-    case Phase::COARSE_APPROACH:
-      return "COARSE_APPROACH";
     case Phase::COARSE_FEEDFORWARD:
       return "COARSE_FEEDFORWARD";
     case Phase::FINE:
@@ -669,6 +686,29 @@ private:
     {
       age_out = (ros::WallTime::now() - last_cube_rx_wall_).toSec();
     }
+    return true;
+  }
+
+  bool loadToolToTipFromParams()
+  {
+    std::vector<double> t;
+    std::vector<double> q;
+    if (!pnh_.getParam("tool_extrinsic_tool_to_tip/translation_m", t) ||
+        !pnh_.getParam("tool_extrinsic_tool_to_tip/rotation_xyzw", q))
+    {
+      return false;
+    }
+    if (t.size() != 3 || q.size() != 4)
+    {
+      ROS_ERROR("[PoseServo] tool_extrinsic_tool_to_tip translation_m/rotation_xyzw malformed");
+      return false;
+    }
+    Eigen::Isometry3d T_tt = Eigen::Isometry3d::Identity();
+    T_tt.translation() = Eigen::Vector3d(t[0], t[1], t[2]);
+    Eigen::Quaterniond qtt(q[3], q[0], q[1], q[2]);
+    qtt.normalize();
+    T_tt.linear() = qtt.toRotationMatrix();
+    T_tool_to_tip_ = T_tt;
     return true;
   }
 
@@ -753,7 +793,13 @@ private:
       return;
     }
 
-    computeLatestError();
+    if (!computeLatestError())
+    {
+      state_ = State::HOLD;
+      publishReached(false, "MISSING_TOOL_TO_TIP_YAML");
+      publishStatus(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), cube_age);
+      return;
+    }
 
     double ep_norm = latest_ep_.norm();
     double etheta_norm = latest_etheta_.norm();
@@ -897,14 +943,29 @@ private:
     return true;
   }
 
-  void computeLatestError()
+  bool computeLatestError()
   {
     latest_T_world_cube_est_ = poseMsgToIso(last_cube_pose_.pose);
-    latest_T_world_tool_des_ = poseMsgToIso(target_tool_world_.pose);
-    Eigen::Isometry3d T_world_cube_des = latest_T_world_tool_des_ * T_tool_to_cube_;
+    Eigen::Isometry3d T_world_target = poseMsgToIso(target_tool_world_.pose);
+    if (target_is_tip_)
+    {
+      if (!tool_to_tip_loaded_)
+      {
+        return false;
+      }
+      latest_T_world_tool_cmd_ = T_world_target * T_tool_to_tip_.inverse();
+      Eigen::Isometry3d T_world_cube_des = T_world_target * T_tip_to_cube_;
+      Eigen::Matrix<double, 6, 1> xi = computeError(latest_T_world_cube_est_, T_world_cube_des);
+      latest_ep_ = xi.head<3>();
+      latest_etheta_ = xi.tail<3>();
+      return true;
+    }
+    latest_T_world_tool_cmd_ = T_world_target;
+    Eigen::Isometry3d T_world_cube_des = T_world_target * T_tool_to_cube_;
     Eigen::Matrix<double, 6, 1> xi = computeError(latest_T_world_cube_est_, T_world_cube_des);
     latest_ep_ = xi.head<3>();
     latest_etheta_ = xi.tail<3>();
+    return true;
   }
 
   void sendTimer(const ros::TimerEvent &)
@@ -924,9 +985,14 @@ private:
       return;
     }
 
-    computeLatestError();
+    if (!computeLatestError())
+    {
+      state_ = State::HOLD;
+      publishReached(false, "MISSING_TOOL_TO_TIP_YAML");
+      return;
+    }
     Eigen::Isometry3d T_world_cube_est = latest_T_world_cube_est_;
-    Eigen::Isometry3d T_world_tool_des = latest_T_world_tool_des_;
+    Eigen::Isometry3d T_world_tool_des = latest_T_world_tool_cmd_;
     Eigen::Vector3d ep = latest_ep_;
     Eigen::Vector3d etheta = latest_etheta_;
 
@@ -1092,9 +1158,8 @@ private:
 
   Eigen::Isometry3d T_world_base_{Eigen::Isometry3d::Identity()};
   Eigen::Isometry3d T_tool_to_cube_{Eigen::Isometry3d::Identity()};
-  Eigen::Isometry3d last_command_pose_{Eigen::Isometry3d::Identity()};
   Eigen::Isometry3d latest_T_world_cube_est_{Eigen::Isometry3d::Identity()};
-  Eigen::Isometry3d latest_T_world_tool_des_{Eigen::Isometry3d::Identity()};
+  Eigen::Isometry3d latest_T_world_tool_cmd_{Eigen::Isometry3d::Identity()};
   Eigen::Vector3d latest_ep_{Eigen::Vector3d::Zero()};
   Eigen::Vector3d latest_etheta_{Eigen::Vector3d::Zero()};
 
@@ -1122,14 +1187,8 @@ private:
   double progress_improve_ratio_{0.98};
   bool use_two_stage_{true};
   double coarse_v_max_{0.08};
-  double coarse_w_max_deg_{30.0};
-  double coarse_w_max_rad_{30.0 * M_PI / 180.0};
-  double coarse_pos_gate_m_{0.03};
-  double coarse_ang_gate_deg_{15.0};
-  double coarse_ang_gate_rad_{15.0 * M_PI / 180.0};
-  double coarse_approach_dist_m_{0.08};
-  std::string coarse_approach_axis_{"tool_-z"};
-  bool coarse_keep_current_orientation_{true};
+  bool target_is_tip_{true};
+  bool tool_to_tip_loaded_{false};
   bool coarse_done_reported_{false};
   bool coarse_ff_sent_{false};
 
@@ -1143,15 +1202,14 @@ private:
   ros::Time last_step_time_;
   ros::Time settle_until_;
   double last_dt_cmd_used_{0.0};
-  uint64_t last_cmd_seq_{0};
   std::string last_move_ret_{"NONE"};
   double best_ep_norm_{std::numeric_limits<double>::infinity()};
   double best_etheta_norm_{std::numeric_limits<double>::infinity()};
   ros::Time last_progress_time_;
   std::string last_result_{"INIT"};
 
-  Eigen::Vector3d last_ep_{Eigen::Vector3d::Zero()};
-  Eigen::Vector3d last_etheta_{Eigen::Vector3d::Zero()};
+  Eigen::Isometry3d T_tool_to_tip_{Eigen::Isometry3d::Identity()};
+  Eigen::Isometry3d T_tip_to_cube_{Eigen::Isometry3d::Identity()};
 };
 
 int main(int argc, char **argv)
