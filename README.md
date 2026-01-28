@@ -249,3 +249,48 @@ rosservice call /jaka2/pose_servo_world/get_cube_pose_world "{}"
 - `robot_ids` 可自由裁剪，未出现的机器人只会输出 warn，不会终止节点。  
 - 仅连接 jaka1 时，`world_robot_calib_record.launch`/`cube_fusion_*` 仍可正常运行；多机器人画面同时出现时会得到各自的 `/vision/jakaX/cube_center`。  
 - `fiducial_relay_node` 默认放行所有非 world_id，因此不会因未配置 tool_ids 而丢失 110/210/... face_id。
+
+## CSV 路点执行（开环，TCP=megnetic_1）
+
+### 准备 CSV
+把路点文件放到：
+`~/catkin_ws/src/jaka_close_contro/config/Ushape_sample6_points.csv`
+
+格式：`idx,x,y,z,RX,RY,RZ`（位置 mm；姿态默认度）
+
+### 确认控制器 TCP
+在上位机/示教器/控制器中确认当前激活 TCP 为：`megnetic_1`  
+（本节点不会切换 TCP，只会按当前 TCP 执行）
+
+### 启动机器人驱动
+验证 linear_move 服务：
+```bash
+rosservice info /jaka1/jaka_driver/linear_move
+```
+
+### 编译
+```bash
+cd ~/catkin_ws
+catkin_make
+source devel/setup.bash
+```
+
+### 运行（推荐 namespace 方式）
+```bash
+rosrun jaka_close_contro jaka_csv_waypoint_player_node __ns:=/jaka1 \
+  _waypoint_csv:=/home/zxy/catkin_ws/src/jaka_close_contro/config/Ushape_sample6_points.csv \
+  _linear_move_service:=jaka_driver/linear_move \
+  _joint_state_topic:=/joint_states \
+  _angles_in_degrees:=true \
+  _dwell_sec:=2.0 \
+  _speed_scale:=0.15
+```
+
+### 常见参数调整
+- CSV 角度若已是弧度：`_angles_in_degrees:=false`
+- 调速度：`_speed_scale:=0.10`（或改 `linear_speed_mm_s`）
+- 判停稳更严格：调大 `motion_stable_duration_sec` 或调小 `motion_joint_threshold_rad`
+
+### 安全提示
+- 确保路径无碰撞、无奇异；首次建议小速度（`speed_scale<=0.1`）
+- 若 `/joint_states` 没有数据，节点会一直提示等待（需要确保驱动发布 joint_states）
