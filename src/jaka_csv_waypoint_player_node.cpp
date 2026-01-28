@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 #include <boost/bind.hpp>
+#include <memory>
 
 namespace
 {
@@ -128,18 +129,18 @@ public:
     {
       for (auto &arm : arms_)
       {
-        if (!arm.enabled)
+        if (!arm || !arm->enabled)
         {
           continue;
         }
         while (ros::ok())
         {
-          if (ros::service::waitForService(arm.linear_move_service, ros::Duration(1.0)))
+          if (ros::service::waitForService(arm->linear_move_service, ros::Duration(1.0)))
           {
-            ROS_INFO("[CsvWaypoint] linear_move 服务就绪: %s", arm.linear_move_service.c_str());
+            ROS_INFO("[CsvWaypoint] linear_move 服务就绪: %s", arm->linear_move_service.c_str());
             break;
           }
-          ROS_WARN("[CsvWaypoint] 等待 %s ...", arm.linear_move_service.c_str());
+          ROS_WARN("[CsvWaypoint] 等待 %s ...", arm->linear_move_service.c_str());
         }
       }
       return;
@@ -356,8 +357,8 @@ private:
 
     for (auto it = arms_param.begin(); it != arms_param.end(); ++it)
     {
-      ArmContext arm;
-      arm.name = it->first;
+      auto arm = std::make_shared<ArmContext>();
+      arm->name = it->first;
       if (it->second.getType() != XmlRpc::XmlRpcValue::TypeStruct)
       {
         continue;
@@ -365,28 +366,30 @@ private:
       XmlRpc::XmlRpcValue cfg = it->second;
       if (cfg.hasMember("enabled"))
       {
-        arm.enabled = static_cast<bool>(cfg["enabled"]);
+        arm->enabled = static_cast<bool>(cfg["enabled"]);
       }
       if (cfg.hasMember("tcp_name"))
       {
-        arm.tcp_name = static_cast<std::string>(cfg["tcp_name"]);
+        arm->tcp_name = static_cast<std::string>(cfg["tcp_name"]);
       }
       if (cfg.hasMember("waypoint_csv"))
       {
-        arm.waypoint_csv = static_cast<std::string>(cfg["waypoint_csv"]);
+        arm->waypoint_csv = static_cast<std::string>(cfg["waypoint_csv"]);
       }
       if (cfg.hasMember("linear_move_service"))
       {
-        arm.linear_move_service = static_cast<std::string>(cfg["linear_move_service"]);
+        arm->linear_move_service = static_cast<std::string>(cfg["linear_move_service"]);
       }
       if (cfg.hasMember("joint_state_topic"))
       {
-        arm.joint_state_topic = static_cast<std::string>(cfg["joint_state_topic"]);
+        arm->joint_state_topic = static_cast<std::string>(cfg["joint_state_topic"]);
       }
       arms_.push_back(arm);
     }
 
-    multi_arm_mode_ = std::any_of(arms_.begin(), arms_.end(), [](const ArmContext &arm) { return arm.enabled; });
+    multi_arm_mode_ = std::any_of(arms_.begin(), arms_.end(), [](const std::shared_ptr<ArmContext> &arm) {
+      return arm && arm->enabled;
+    });
   }
 
   void setupArmInterfaces()
@@ -394,13 +397,13 @@ private:
     for (size_t i = 0; i < arms_.size(); ++i)
     {
       auto &arm = arms_[i];
-      if (!arm.enabled)
+      if (!arm || !arm->enabled)
       {
         continue;
       }
-      arm.move_client = nh_.serviceClient<jaka_msgs::Move>(arm.linear_move_service);
-      arm.joint_sub = nh_.subscribe<sensor_msgs::JointState>(
-          arm.joint_state_topic, 50, boost::bind(&JakaCsvWaypointPlayer::jointStateCallbackMulti, this, _1, i));
+      arm->move_client = nh_.serviceClient<jaka_msgs::Move>(arm->linear_move_service);
+      arm->joint_sub = nh_.subscribe<sensor_msgs::JointState>(
+          arm->joint_state_topic, 50, boost::bind(&JakaCsvWaypointPlayer::jointStateCallbackMulti, this, _1, i));
     }
   }
 
@@ -411,41 +414,41 @@ private:
       return;
     }
     auto &arm = arms_[arm_index];
-    if (!arm.enabled)
+    if (!arm || !arm->enabled)
     {
       return;
     }
     if (msg->position.size() < 6)
     {
-      ROS_WARN_THROTTLE(5.0, "[CsvWaypoint] %s joint_state 位置元素不足6个，忽略该帧", arm.name.c_str());
+      ROS_WARN_THROTTLE(5.0, "[CsvWaypoint] %s joint_state 位置元素不足6个，忽略该帧", arm->name.c_str());
       return;
     }
 
     const ros::Time stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
-    std::lock_guard<std::mutex> lock(arm.joint_mutex);
+    std::lock_guard<std::mutex> lock(arm->joint_mutex);
 
-    if (arm.has_prev_joint)
+    if (arm->has_prev_joint)
     {
       double max_diff = 0.0;
-      const size_t n = std::min(arm.prev_joint_pos.size(), msg->position.size());
+      const size_t n = std::min(arm->prev_joint_pos.size(), msg->position.size());
       for (size_t i = 0; i < n; ++i)
       {
-        const double diff = std::abs(msg->position[i] - arm.prev_joint_pos[i]);
+        const double diff = std::abs(msg->position[i] - arm->prev_joint_pos[i]);
         max_diff = std::max(max_diff, diff);
       }
       if (max_diff > motion_joint_threshold_rad_)
       {
-        arm.last_motion_time = stamp;
+        arm->last_motion_time = stamp;
       }
     }
     else
     {
-      arm.last_motion_time = stamp;
-      arm.has_prev_joint = true;
+      arm->last_motion_time = stamp;
+      arm->has_prev_joint = true;
     }
 
-    arm.prev_joint_pos = msg->position;
-    arm.last_joint_stamp = stamp;
+    arm->prev_joint_pos = msg->position;
+    arm->last_joint_stamp = stamp;
   }
 
   bool loadWaypointsFromCsv(const std::string &path, std::vector<Waypoint> &out)
@@ -529,17 +532,17 @@ private:
   {
     for (auto &arm : arms_)
     {
-      if (!arm.enabled)
+      if (!arm || !arm->enabled)
       {
         continue;
       }
-      if (!loadWaypointsFromCsv(arm.waypoint_csv, arm.waypoints))
+      if (!loadWaypointsFromCsv(arm->waypoint_csv, arm->waypoints))
       {
-        ROS_ERROR("[CsvWaypoint] %s 路点加载失败", arm.name.c_str());
+        ROS_ERROR("[CsvWaypoint] %s 路点加载失败", arm->name.c_str());
         return false;
       }
-      ROS_INFO("[CsvWaypoint] %s 已加载 %zu 个路点，TCP=%s", arm.name.c_str(), arm.waypoints.size(),
-               arm.tcp_name.c_str());
+      ROS_INFO("[CsvWaypoint] %s 已加载 %zu 个路点，TCP=%s", arm->name.c_str(), arm->waypoints.size(),
+               arm->tcp_name.c_str());
     }
 
     if (require_same_count_)
@@ -548,16 +551,16 @@ private:
       bool count_set = false;
       for (const auto &arm : arms_)
       {
-        if (!arm.enabled)
+        if (!arm || !arm->enabled)
         {
           continue;
         }
         if (!count_set)
         {
-          count = arm.waypoints.size();
+          count = arm->waypoints.size();
           count_set = true;
         }
-        else if (arm.waypoints.size() != count)
+        else if (arm->waypoints.size() != count)
         {
           ROS_ERROR("[CsvWaypoint] 各机械臂路点数量不一致");
           return false;
@@ -567,11 +570,11 @@ private:
     return true;
   }
 
-  bool sendLinearTargetMulti(ArmContext &arm, const Waypoint &wp, int sequence_index)
+  bool sendLinearTargetMulti(const std::shared_ptr<ArmContext> &arm, const Waypoint &wp, int sequence_index)
   {
     if (!use_driver_ || !do_motion_)
     {
-      ROS_INFO("[CsvWaypoint] %s use_driver/do_motion=false，跳过运动发送", arm.name.c_str());
+      ROS_INFO("[CsvWaypoint] %s use_driver/do_motion=false，跳过运动发送", arm->name.c_str());
       return true;
     }
     const double deg2rad = M_PI / 180.0;
@@ -590,16 +593,16 @@ private:
     srv.request.coord_mode = coord_mode_;
     srv.request.index = static_cast<int32_t>(sequence_index);
 
-    if (!arm.move_client.call(srv))
+    if (!arm->move_client.call(srv))
     {
-      ROS_ERROR("[CsvWaypoint] %s linear_move 通信失败，idx=%d 未发送", arm.name.c_str(), wp.idx);
+      ROS_ERROR("[CsvWaypoint] %s linear_move 通信失败，idx=%d 未发送", arm->name.c_str(), wp.idx);
       return false;
     }
-    ROS_INFO("[CsvWaypoint] %s linear_move ret=%d, message=%s", arm.name.c_str(), srv.response.ret,
+    ROS_INFO("[CsvWaypoint] %s linear_move ret=%d, message=%s", arm->name.c_str(), srv.response.ret,
              srv.response.message.c_str());
     if (srv.response.ret != 0)
     {
-      ROS_ERROR("[CsvWaypoint] %s linear_move 执行失败，ret=%d, message=%s", arm.name.c_str(), srv.response.ret,
+      ROS_ERROR("[CsvWaypoint] %s linear_move 执行失败，ret=%d, message=%s", arm->name.c_str(), srv.response.ret,
                 srv.response.message.c_str());
       return false;
     }
@@ -626,21 +629,21 @@ private:
       for (size_t i = 0; i < arms_.size(); ++i)
       {
         auto &arm = arms_[i];
-        if (!arm.enabled)
+        if (!arm || !arm->enabled)
         {
           continue;
         }
         ros::Time last_motion;
         ros::Time last_stamp;
         {
-          std::lock_guard<std::mutex> lock(arm.joint_mutex);
-          last_motion = arm.last_motion_time;
-          last_stamp = arm.last_joint_stamp;
+          std::lock_guard<std::mutex> lock(arm->joint_mutex);
+          last_motion = arm->last_motion_time;
+          last_stamp = arm->last_joint_stamp;
         }
 
         if (last_stamp.isZero())
         {
-          ROS_WARN_THROTTLE(2.0, "[CsvWaypoint] %s 尚未收到 joint_state，继续等待...", arm.name.c_str());
+          ROS_WARN_THROTTLE(2.0, "[CsvWaypoint] %s 尚未收到 joint_state，继续等待...", arm->name.c_str());
           all_stable = false;
           continue;
         }
@@ -682,18 +685,18 @@ private:
     bool count_set = false;
     for (const auto &arm : arms_)
     {
-      if (!arm.enabled)
+      if (!arm || !arm->enabled)
       {
         continue;
       }
       if (!count_set)
       {
-        count = arm.waypoints.size();
+        count = arm->waypoints.size();
         count_set = true;
       }
       else if (!require_same_count_)
       {
-        count = std::min(count, arm.waypoints.size());
+        count = std::min(count, arm->waypoints.size());
       }
     }
     if (!count_set || count == 0)
@@ -727,16 +730,16 @@ private:
       bool ref_set = false;
       for (const auto &arm : arms_)
       {
-        if (!arm.enabled)
+        if (!arm || !arm->enabled)
         {
           continue;
         }
         if (!ref_set)
         {
-          ref_idx = arm.waypoints[static_cast<size_t>(idx)].idx;
+          ref_idx = arm->waypoints[static_cast<size_t>(idx)].idx;
           ref_set = true;
         }
-        else if (sync_by_idx_ && arm.waypoints[static_cast<size_t>(idx)].idx != ref_idx)
+        else if (sync_by_idx_ && arm->waypoints[static_cast<size_t>(idx)].idx != ref_idx)
         {
           idx_mismatch = true;
         }
@@ -752,16 +755,17 @@ private:
 
       std::vector<std::thread> threads;
       std::vector<bool> results(arms_.size(), false);
+      threads.reserve(arms_.size());
       for (size_t i = 0; i < arms_.size(); ++i)
       {
         auto &arm = arms_[i];
-        if (!arm.enabled)
+        if (!arm || !arm->enabled)
         {
           continue;
         }
-        const Waypoint &wp = arm.waypoints[static_cast<size_t>(idx)];
+        const Waypoint &wp = arm->waypoints[static_cast<size_t>(idx)];
         ROS_INFO("[CsvWaypoint] %s idx=%d pos(mm)=[%.3f %.3f %.3f] rpy(%s)=[%.3f %.3f %.3f]",
-                 arm.name.c_str(), wp.idx, wp.x_mm, wp.y_mm, wp.z_mm,
+                 arm->name.c_str(), wp.idx, wp.x_mm, wp.y_mm, wp.z_mm,
                  angles_in_degrees_ ? "deg" : "rad", wp.rx, wp.ry, wp.rz);
         threads.emplace_back([this, &arm, &wp, &results, i, sequence_index]() {
           results[i] = sendLinearTargetMulti(arm, wp, sequence_index);
@@ -773,7 +777,7 @@ private:
       }
       for (size_t i = 0; i < arms_.size(); ++i)
       {
-        if (!arms_[i].enabled)
+        if (!arms_[i] || !arms_[i]->enabled)
         {
           continue;
         }
@@ -873,7 +877,7 @@ private:
   ros::Time last_joint_stamp_;
 
   std::vector<Waypoint> waypoints_;
-  std::vector<ArmContext> arms_;
+  std::vector<std::shared_ptr<ArmContext>> arms_;
 };
 
 int main(int argc, char **argv)
