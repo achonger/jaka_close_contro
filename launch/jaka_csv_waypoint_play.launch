@@ -40,7 +40,6 @@
 
   <!-- 0. 机器人驱动 -->
   <group ns="jaka1" if="$(arg enable_jaka1)">
-    <remap from="/joint_states" to="joint_states" />
     <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
       <arg name="ip" value="$(arg robot_ip_jaka1)" />
       <arg name="urdf_file" value="$(arg urdf_file)" />
@@ -48,7 +47,6 @@
   </group>
 
   <group ns="jaka2" if="$(arg enable_jaka2)">
-    <remap from="/joint_states" to="joint_states" />
     <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
       <arg name="ip" value="$(arg robot_ip_jaka2)" />
       <arg name="urdf_file" value="$(arg urdf_file)" />
@@ -56,7 +54,6 @@
   </group>
 
   <group ns="jaka3" if="$(arg enable_jaka3)">
-    <remap from="/joint_states" to="joint_states" />
     <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
       <arg name="ip" value="$(arg robot_ip_jaka3)" />
       <arg name="urdf_file" value="$(arg urdf_file)" />
@@ -64,7 +61,6 @@
   </group>
 
   <group ns="jaka4" if="$(arg enable_jaka4)">
-    <remap from="/joint_states" to="joint_states" />
     <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
       <arg name="ip" value="$(arg robot_ip_jaka4)" />
       <arg name="urdf_file" value="$(arg urdf_file)" />
@@ -91,32 +87,31 @@
     <param name="require_same_count" value="$(arg require_same_count)" />
     <param name="sync_by_idx" value="$(arg sync_by_idx)" />
     <param name="tcp_name" value="$(arg tcp_jaka1)" />
-    <rosparam subst_value="true">
-      arms:
-        jaka1:
-          enabled: $(arg enable_jaka1)
-          tcp_name: $(arg tcp_jaka1)
-          waypoint_csv: $(arg csv_jaka1)
-          linear_move_service: /jaka1/jaka_driver/linear_move
-          joint_state_topic: /jaka1/joint_states
-        jaka2:
-          enabled: $(arg enable_jaka2)
-          tcp_name: $(arg tcp_jaka2)
-          waypoint_csv: $(arg csv_jaka2)
-          linear_move_service: /jaka2/jaka_driver/linear_move
-          joint_state_topic: /jaka2/joint_states
-        jaka3:
-          enabled: $(arg enable_jaka3)
-          tcp_name: $(arg tcp_jaka3)
-          waypoint_csv: $(arg csv_jaka3)
-          linear_move_service: /jaka3/jaka_driver/linear_move
-          joint_state_topic: /jaka3/joint_states
-        jaka4:
-          enabled: $(arg enable_jaka4)
-          tcp_name: $(arg tcp_jaka4)
-          waypoint_csv: $(arg csv_jaka4)
-          linear_move_service: /jaka4/jaka_driver/linear_move
-          joint_state_topic: /jaka4/joint_states
+    <rosparam param="arms" subst_value="true">
+      jaka1:
+        enabled: $(arg enable_jaka1)
+        tcp_name: "$(arg tcp_jaka1)"
+        waypoint_csv: "$(arg csv_jaka1)"
+        linear_move_service: /jaka1/jaka_driver/linear_move
+        joint_state_topic: /jaka1/joint_states
+      jaka2:
+        enabled: $(arg enable_jaka2)
+        tcp_name: "$(arg tcp_jaka2)"
+        waypoint_csv: "$(arg csv_jaka2)"
+        linear_move_service: /jaka2/jaka_driver/linear_move
+        joint_state_topic: /jaka2/joint_states
+      jaka3:
+        enabled: $(arg enable_jaka3)
+        tcp_name: "$(arg tcp_jaka3)"
+        waypoint_csv: "$(arg csv_jaka3)"
+        linear_move_service: /jaka3/jaka_driver/linear_move
+        joint_state_topic: /jaka3/joint_states
+      jaka4:
+        enabled: $(arg enable_jaka4)
+        tcp_name: "$(arg tcp_jaka4)"
+        waypoint_csv: "$(arg csv_jaka4)"
+        linear_move_service: /jaka4/jaka_driver/linear_move
+        joint_state_topic: /jaka4/joint_states
     </rosparam>
   </node>
 </launch>

@@ -536,6 +536,11 @@ private:
       {
         continue;
       }
+      if (arm->waypoint_csv.empty())
+      {
+        ROS_ERROR("[CsvWaypoint] %s 未配置 waypoint_csv", arm->name.c_str());
+        return false;
+      }
       if (!loadWaypointsFromCsv(arm->waypoint_csv, arm->waypoints))
       {
         ROS_ERROR("[CsvWaypoint] %s 路点加载失败", arm->name.c_str());
