@@ -257,6 +257,7 @@ rosservice call /jaka2/pose_servo_world/get_cube_pose_world "{}"
 `~/catkin_ws/src/jaka_close_contro/config/Ushape_sample6_points.csv`
 
 格式：`idx,x,y,z,RX,RY,RZ`（位置 mm；姿态默认度）
+默认服务名：`/jaka_driver/linear_move`
 
 ### 确认控制器 TCP
 在上位机/示教器/控制器中确认当前激活 TCP 为：`megnetic_1`  
@@ -287,6 +288,10 @@ roslaunch jaka_close_contro jaka_csv_waypoint_play.launch robot_name:=jaka1
 - CSV 角度已是弧度：`angles_in_degrees:=false`
 - 服务非 namespace：`linear_move_service:=/jaka_driver/linear_move`
 - joint_states 非全局：`joint_state_topic:=/jaka1/joint_states`
+- 默认往返（推荐）：`roslaunch jaka_close_contro jaka_csv_waypoint_play.launch robot_name:=jaka1`
+- 只跑一遍：`roslaunch jaka_close_contro jaka_csv_waypoint_play.launch robot_name:=jaka1 round_trip:=false`
+- 返程重复最后点：`roslaunch jaka_close_contro jaka_csv_waypoint_play.launch robot_name:=jaka1 reverse_include_last:=true`
+- driver 在 namespace 下：`roslaunch jaka_close_contro jaka_csv_waypoint_play.launch robot_name:=jaka1 linear_move_service:=/jaka1/jaka_driver/linear_move`
 
 ### 排错
 - `rosservice list | grep linear_move`

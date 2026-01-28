@@ -13,7 +13,7 @@
   <arg name="dwell_sec" default="2.0" />
   <arg name="angles_in_degrees" default="true" />
   <arg name="coord_mode" default="0" />
-  <arg name="linear_move_service" default="/$(arg robot_name)/jaka_driver/linear_move" />
+  <arg name="linear_move_service" default="/jaka_driver/linear_move" />
   <arg name="joint_state_topic" default="/joint_states" />
   <arg name="motion_done_timeout_sec" default="120.0" />
   <arg name="motion_stable_duration_sec" default="0.5" />

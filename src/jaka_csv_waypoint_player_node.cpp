@@ -70,6 +70,8 @@ public:
     pnh_.param<bool>("sort_by_idx", sort_by_idx_, true);
     pnh_.param<bool>("use_driver", use_driver_, true);
     pnh_.param<bool>("do_motion", do_motion_, true);
+    pnh_.param<bool>("round_trip", round_trip_, true);
+    pnh_.param<bool>("reverse_include_last", reverse_include_last_, false);
     pnh_.param<std::string>("tcp_name", tcp_name_, std::string("megnetic_1"));
 
     if (speed_scale_ > 0.15)
@@ -278,6 +280,7 @@ public:
       return false;
     }
 
+    int sequence_index = 0;
     for (size_t i = 0; i < waypoints_.size() && ros::ok(); ++i)
     {
       const auto &wp = waypoints_[i];
@@ -285,6 +288,7 @@ public:
                i + 1, waypoints_.size(), wp.idx, wp.x_mm, wp.y_mm, wp.z_mm,
                angles_in_degrees_ ? "deg" : "rad", wp.rx, wp.ry, wp.rz);
 
+      target_index_ = sequence_index;
       if (!sendLinearTarget(wp))
       {
         return false;
@@ -303,7 +307,41 @@ public:
         ROS_INFO("[CsvWaypoint] 到位后停留 %.2f 秒", dwell_sec_);
         ros::Duration(dwell_sec_).sleep();
       }
-      ++target_index_;
+      ++sequence_index;
+    }
+
+    if (round_trip_ && waypoints_.size() > 1)
+    {
+      const int start_index = reverse_include_last_ ? static_cast<int>(waypoints_.size()) - 1
+                                                    : static_cast<int>(waypoints_.size()) - 2;
+      for (int i = start_index; i >= 0 && ros::ok(); --i)
+      {
+        const auto &wp = waypoints_[static_cast<size_t>(i)];
+        ROS_INFO("[CsvWaypoint] [%d/%zu] idx=%d pos(mm)=[%.3f %.3f %.3f] rpy(%s)=[%.3f %.3f %.3f]",
+                 sequence_index + 1, waypoints_.size(), wp.idx, wp.x_mm, wp.y_mm, wp.z_mm,
+                 angles_in_degrees_ ? "deg" : "rad", wp.rx, wp.ry, wp.rz);
+
+        target_index_ = sequence_index;
+        if (!sendLinearTarget(wp))
+        {
+          return false;
+        }
+
+        if (do_motion_)
+        {
+          if (!waitRobotMotionDone(motion_done_timeout_sec_))
+          {
+            return false;
+          }
+        }
+
+        if (dwell_sec_ > 0.0)
+        {
+          ROS_INFO("[CsvWaypoint] 到位后停留 %.2f 秒", dwell_sec_);
+          ros::Duration(dwell_sec_).sleep();
+        }
+        ++sequence_index;
+      }
     }
 
     ROS_INFO("[CsvWaypoint] 路点执行完成");
@@ -368,6 +406,8 @@ private:
   bool sort_by_idx_{true};
   bool use_driver_{true};
   bool do_motion_{true};
+  bool round_trip_{true};
+  bool reverse_include_last_{false};
 
   std::mutex joint_mutex_;
   std::vector<double> prev_joint_pos_;
