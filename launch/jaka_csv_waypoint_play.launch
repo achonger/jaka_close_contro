@@ -1,0 +1,45 @@
+<launch>
+  <!-- 机器人选择 & 配置（ROS1 roslaunch 不支持 load_yaml()；改为静态映射 + 命令行覆盖） -->
+  <arg name="robot_name" default="jaka1" />
+
+  <!-- 若命令行显式传 robot_id/robot_ip，则以命令行为准；否则按 robot_name 映射 -->
+  <arg name="robot_id" default="$(eval {'jaka1':1,'jaka2':2,'jaka3':3,'jaka4':4}.get(arg('robot_name'),1))" />
+  <arg name="robot_ip" default="$(eval {'jaka1':'192.168.1.100','jaka2':'192.168.1.101','jaka3':'192.168.1.102','jaka4':'192.168.1.103'}.get(arg('robot_name'),'192.168.1.100'))" />
+
+  <arg name="urdf_file" default="$(find jaka_close_contro)/urdf/jaka_zu3.urdf" />
+  <arg name="waypoint_csv" default="$(find jaka_close_contro)/config/Ushape_sample6_points.csv" />
+  <arg name="tcp_name" default="megnetic_1" />
+  <arg name="speed_scale" default="0.15" />
+  <arg name="dwell_sec" default="2.0" />
+  <arg name="angles_in_degrees" default="true" />
+  <arg name="coord_mode" default="0" />
+  <arg name="linear_move_service" default="/$(arg robot_name)/jaka_driver/linear_move" />
+  <arg name="joint_state_topic" default="/joint_states" />
+  <arg name="motion_done_timeout_sec" default="120.0" />
+  <arg name="motion_stable_duration_sec" default="0.5" />
+  <arg name="motion_joint_threshold_rad" default="0.002" />
+
+  <!-- 0. 机器人驱动 -->
+  <include file="$(find jaka_close_contro)/launch/jaka_sdk_bringup.launch">
+    <arg name="ip" value="$(arg robot_ip)" />
+    <arg name="urdf_file" value="$(arg urdf_file)" />
+  </include>
+
+  <!-- 1. CSV 路点执行 -->
+  <node pkg="jaka_close_contro"
+        type="jaka_csv_waypoint_player_node"
+        name="jaka_csv_waypoint_player"
+        output="screen">
+    <param name="waypoint_csv" value="$(arg waypoint_csv)" />
+    <param name="linear_move_service" value="$(arg linear_move_service)" />
+    <param name="joint_state_topic" value="$(arg joint_state_topic)" />
+    <param name="speed_scale" value="$(arg speed_scale)" />
+    <param name="dwell_sec" value="$(arg dwell_sec)" />
+    <param name="angles_in_degrees" value="$(arg angles_in_degrees)" />
+    <param name="coord_mode" value="$(arg coord_mode)" />
+    <param name="motion_done_timeout_sec" value="$(arg motion_done_timeout_sec)" />
+    <param name="motion_stable_duration_sec" value="$(arg motion_stable_duration_sec)" />
+    <param name="motion_joint_threshold_rad" value="$(arg motion_joint_threshold_rad)" />
+    <param name="tcp_name" value="$(arg tcp_name)" />
+  </node>
+</launch>

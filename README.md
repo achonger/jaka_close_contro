@@ -275,21 +275,23 @@ catkin_make
 source devel/setup.bash
 ```
 
-### 运行（推荐 namespace 方式）
+### 一键启动
 ```bash
-rosrun jaka_close_contro jaka_csv_waypoint_player_node __ns:=/jaka1 \
-  _waypoint_csv:=/home/zxy/catkin_ws/src/jaka_close_contro/config/Ushape_sample6_points.csv \
-  _linear_move_service:=jaka_driver/linear_move \
-  _joint_state_topic:=/joint_states \
-  _angles_in_degrees:=true \
-  _dwell_sec:=2.0 \
-  _speed_scale:=0.15
+roslaunch jaka_close_contro jaka_csv_waypoint_play.launch robot_name:=jaka1
 ```
 
-### 常见参数调整
-- CSV 角度若已是弧度：`_angles_in_degrees:=false`
-- 调速度：`_speed_scale:=0.10`（或改 `linear_speed_mm_s`）
-- 判停稳更严格：调大 `motion_stable_duration_sec` 或调小 `motion_joint_threshold_rad`
+### 常见参数调整（覆盖示例）
+- CSV 文件路径：`waypoint_csv:=/home/zxy/catkin_ws/src/jaka_close_contro/config/Ushape_sample6_points.csv`
+- 调速度：`speed_scale:=0.10`
+- 停留时间：`dwell_sec:=3.0`
+- CSV 角度已是弧度：`angles_in_degrees:=false`
+- 服务非 namespace：`linear_move_service:=/jaka_driver/linear_move`
+- joint_states 非全局：`joint_state_topic:=/jaka1/joint_states`
+
+### 排错
+- `rosservice list | grep linear_move`
+- `rostopic list | grep joint_states`
+- 若出现 “Failed to contact master”，说明未启动 roscore；使用 roslaunch 会自动起 master。
 
 ### 安全提示
 - 确保路径无碰撞、无奇异；首次建议小速度（`speed_scale<=0.1`）
