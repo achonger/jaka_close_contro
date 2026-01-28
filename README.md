@@ -254,10 +254,13 @@ rosservice call /jaka2/pose_servo_world/get_cube_pose_world "{}"
 
 ### 准备 CSV
 把路点文件放到：
-`~/catkin_ws/src/jaka_close_contro/config/Ushape_sample6_points.csv`
+`~/catkin_ws/src/jaka_close_contro/config/Ushape_sample12_points.csv`
 
 格式：`idx,x,y,z,RX,RY,RZ`（位置 mm；姿态默认度）
-默认服务名：`/jaka_driver/linear_move`
+默认服务名：`/jaka_driver/linear_move`（单臂兼容；多臂模式使用 `/jakaX/jaka_driver/linear_move`）
+多臂默认 CSV：
+- jaka1：`config/Ushape_sample12_points.csv`
+- jaka2：`config/magnetic_2_tcp_12points_from_current.csv`
 
 ### 确认控制器 TCP
 在上位机/示教器/控制器中确认当前激活 TCP 为：`megnetic_1`  
@@ -276,27 +279,36 @@ catkin_make
 source devel/setup.bash
 ```
 
-### 一键启动
+### 一键启动（两臂默认同步）
 ```bash
-roslaunch jaka_close_contro jaka_csv_waypoint_play.launch robot_name:=jaka1
+roslaunch jaka_close_contro jaka_csv_waypoint_play.launch
+```
+
+### 单臂运行
+```bash
+roslaunch jaka_close_contro jaka_csv_waypoint_play.launch enable_jaka2:=false
 ```
 
 ### 常见参数调整（覆盖示例）
-- CSV 文件路径：`waypoint_csv:=/home/zxy/catkin_ws/src/jaka_close_contro/config/Ushape_sample6_points.csv`
+- CSV 文件路径：`csv_jaka1:=/home/zxy/catkin_ws/src/jaka_close_contro/config/Ushape_sample12_points.csv`
+- CSV 文件路径（jaka2）：`csv_jaka2:=/home/zxy/catkin_ws/src/jaka_close_contro/config/magnetic_2_tcp_12points_from_current.csv`
+- TCP 名称：`tcp_jaka1:=magnetic_1 tcp_jaka2:=magnetic_2`
 - 调速度：`speed_scale:=0.10`
 - 停留时间：`dwell_sec:=3.0`
 - CSV 角度已是弧度：`angles_in_degrees:=false`
-- 服务非 namespace：`linear_move_service:=/jaka_driver/linear_move`
-- joint_states 非全局：`joint_state_topic:=/jaka1/joint_states`
-- 默认往返（推荐）：`roslaunch jaka_close_contro jaka_csv_waypoint_play.launch robot_name:=jaka1`
-- 只跑一遍：`roslaunch jaka_close_contro jaka_csv_waypoint_play.launch robot_name:=jaka1 round_trip:=false`
-- 返程重复最后点：`roslaunch jaka_close_contro jaka_csv_waypoint_play.launch robot_name:=jaka1 reverse_include_last:=true`
-- driver 在 namespace 下：`roslaunch jaka_close_contro jaka_csv_waypoint_play.launch robot_name:=jaka1 linear_move_service:=/jaka1/jaka_driver/linear_move`
+- 往返控制：`round_trip:=false` / `reverse_include_last:=true`
+- driver 在 namespace 下：`linear_move_service:=/jaka1/jaka_driver/linear_move`
+
+### 同步执行说明
+- 每个 step 同时发命令给所有 enabled 机械臂，两臂都停稳后再进入下一点；默认往返：正向到末点，再反向回起点后停止。
 
 ### 排错
 - `rosservice list | grep linear_move`
 - `rostopic list | grep joint_states`
 - 若出现 “Failed to contact master”，说明未启动 roscore；使用 roslaunch 会自动起 master。
+  - 多臂应看到 `/jaka1/jaka_driver/linear_move`、`/jaka2/jaka_driver/linear_move`
+  - 多臂应看到 `/jaka1/joint_states`、`/jaka2/joint_states`
+  - 若没有 namespaced joint_states，多臂停稳检测无法工作，需要修 bringup/adapter。
 
 ### 安全提示
 - 确保路径无碰撞、无奇异；首次建议小速度（`speed_scale<=0.1`）
