@@ -25,6 +25,10 @@
   <arg name="tcp_jaka4" default="magnetic_4" />
 
   <arg name="speed_scale" default="0.15" />
+  <arg name="speed_scale_jaka1" default="0.15" />
+  <arg name="speed_scale_jaka2" default="0.0495" />
+  <arg name="speed_scale_jaka3" default="$(arg speed_scale_jaka1)" />
+  <arg name="speed_scale_jaka4" default="$(arg speed_scale_jaka1)" />
   <arg name="dwell_sec" default="2.0" />
   <arg name="angles_in_degrees" default="true" />
   <arg name="coord_mode" default="0" />
@@ -228,24 +232,28 @@
         enabled: $(arg enable_jaka1)
         tcp_name: "$(arg tcp_jaka1)"
         waypoint_csv: "$(arg csv_jaka1)"
+        speed_scale: $(arg speed_scale_jaka1)
         linear_move_service: /jaka1/jaka_driver/linear_move
         joint_state_topic: /jaka1/joint_states
       jaka2:
         enabled: $(arg enable_jaka2)
         tcp_name: "$(arg tcp_jaka2)"
         waypoint_csv: "$(arg csv_jaka2)"
+        speed_scale: $(arg speed_scale_jaka2)
         linear_move_service: /jaka2/jaka_driver/linear_move
         joint_state_topic: /jaka2/joint_states
       jaka3:
         enabled: $(arg enable_jaka3)
         tcp_name: "$(arg tcp_jaka3)"
         waypoint_csv: "$(arg csv_jaka3)"
+        speed_scale: $(arg speed_scale_jaka3)
         linear_move_service: /jaka3/jaka_driver/linear_move
         joint_state_topic: /jaka3/joint_states
       jaka4:
         enabled: $(arg enable_jaka4)
         tcp_name: "$(arg tcp_jaka4)"
         waypoint_csv: "$(arg csv_jaka4)"
+        speed_scale: $(arg speed_scale_jaka4)
         linear_move_service: /jaka4/jaka_driver/linear_move
         joint_state_topic: /jaka4/joint_states
     </rosparam>

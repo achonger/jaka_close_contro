@@ -336,6 +336,7 @@ private:
     std::string waypoint_csv;
     std::string linear_move_service;
     std::string joint_state_topic;
+    double speed_scale{0.0};
     ros::ServiceClient move_client;
     ros::Subscriber joint_sub;
     std::vector<Waypoint> waypoints;
@@ -383,6 +384,10 @@ private:
       if (cfg.hasMember("joint_state_topic"))
       {
         arm->joint_state_topic = static_cast<std::string>(cfg["joint_state_topic"]);
+      }
+      if (cfg.hasMember("speed_scale"))
+      {
+        arm->speed_scale = static_cast<double>(cfg["speed_scale"]);
       }
       arms_.push_back(arm);
     }
@@ -541,6 +546,15 @@ private:
         ROS_ERROR("[CsvWaypoint] %s 未配置 waypoint_csv", arm->name.c_str());
         return false;
       }
+      if (arm->speed_scale <= 0.0)
+      {
+        arm->speed_scale = speed_scale_;
+      }
+      if (arm->speed_scale > 0.15)
+      {
+        ROS_WARN("[CsvWaypoint] %s speed_scale=%.3f 超过 0.15，已限制为 0.15", arm->name.c_str(), arm->speed_scale);
+        arm->speed_scale = 0.15;
+      }
       if (!loadWaypointsFromCsv(arm->waypoint_csv, arm->waypoints))
       {
         ROS_ERROR("[CsvWaypoint] %s 路点加载失败", arm->name.c_str());
@@ -591,8 +605,8 @@ private:
                         static_cast<float>(wp.rx * scale),
                         static_cast<float>(wp.ry * scale),
                         static_cast<float>(wp.rz * scale)};
-    srv.request.mvvelo = static_cast<float>(linear_speed_mm_s_ * speed_scale_);
-    srv.request.mvacc = static_cast<float>(linear_acc_mm_s2_ * speed_scale_);
+    srv.request.mvvelo = static_cast<float>(linear_speed_mm_s_ * arm->speed_scale);
+    srv.request.mvacc = static_cast<float>(linear_acc_mm_s2_ * arm->speed_scale);
     srv.request.mvtime = 0.0;
     srv.request.mvradii = 0.0;
     srv.request.coord_mode = coord_mode_;
@@ -769,9 +783,9 @@ private:
           continue;
         }
         const Waypoint &wp = arm->waypoints[static_cast<size_t>(idx)];
-        ROS_INFO("[CsvWaypoint] %s idx=%d pos(mm)=[%.3f %.3f %.3f] rpy(%s)=[%.3f %.3f %.3f]",
+        ROS_INFO("[CsvWaypoint] %s idx=%d pos(mm)=[%.3f %.3f %.3f] rpy(%s)=[%.3f %.3f %.3f] speed_scale=%.4f",
                  arm->name.c_str(), wp.idx, wp.x_mm, wp.y_mm, wp.z_mm,
-                 angles_in_degrees_ ? "deg" : "rad", wp.rx, wp.ry, wp.rz);
+                 angles_in_degrees_ ? "deg" : "rad", wp.rx, wp.ry, wp.rz, arm->speed_scale);
         threads.emplace_back([this, &arm, &wp, &results, i, sequence_index]() {
           results[i] = sendLinearTargetMulti(arm, wp, sequence_index);
         });

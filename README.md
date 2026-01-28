@@ -294,6 +294,7 @@ roslaunch jaka_close_contro jaka_csv_waypoint_play.launch enable_jaka2:=false
 - CSV 文件路径（jaka2）：`csv_jaka2:=/home/zxy/catkin_ws/src/jaka_close_contro/config/magnetic_2_tcp_12points_from_current.csv`
 - TCP 名称：`tcp_jaka1:=magnetic_1 tcp_jaka2:=magnetic_2`
 - 调速度：`speed_scale:=0.10`
+- 分臂速度倍率：`speed_scale_jaka1:=0.15 speed_scale_jaka2:=0.0495`
 - 停留时间：`dwell_sec:=3.0`
 - CSV 角度已是弧度：`angles_in_degrees:=false`
 - 往返控制：`round_trip:=false` / `reverse_include_last:=true`
