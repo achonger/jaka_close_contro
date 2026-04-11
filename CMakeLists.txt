@@ -133,6 +133,12 @@ target_link_libraries(pose_servo_world_node
 )
 add_dependencies(pose_servo_world_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
+add_executable(jaka_csv_waypoint_player_node src/jaka_csv_waypoint_player_node.cpp)
+target_link_libraries(jaka_csv_waypoint_player_node
+  ${catkin_LIBRARIES}
+)
+add_dependencies(jaka_csv_waypoint_player_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
 catkin_install_python(PROGRAMS
   scripts/tf_to_pose_stamped_node.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

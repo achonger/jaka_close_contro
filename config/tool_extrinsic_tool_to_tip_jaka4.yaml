@@ -1,0 +1,5 @@
+tool_extrinsic_tool_to_tip:
+  tool_frame: Link_6
+  tip_frame: tip_jaka4
+  translation_m: [0.0, 0.0, 0.161]
+  rotation_xyzw: [0.0, 0.0, 0.0, 1.0]

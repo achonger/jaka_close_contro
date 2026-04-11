@@ -28,7 +28,7 @@ public:
     pnh_.param("default_marker_size", default_marker_size_, 0.04); // 默认40mm
     pnh_.param<std::string>("dictionary", dictionary_name_, "DICT_4X4_50");
     pnh_.param<std::string>("tool_dictionary", tool_dictionary_name_, "DICT_6X6_1000");
-    pnh_.param("tool_marker_length_m", tool_marker_length_m_, 0.0425);
+    pnh_.param("tool_marker_length_m", tool_marker_length_m_, 0.04);
     pnh_.param("tool_marker_separation_m", tool_marker_separation_m_, 0.005);
     pnh_.param("tool_board_active_size_m", tool_board_active_size_m_, -1.0);
     pnh_.param("min_gridboard_markers", min_gridboard_markers_, 2);
